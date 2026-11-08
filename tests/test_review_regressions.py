@@ -4,6 +4,9 @@ import fcntl
 import json
 import shutil
 import unittest
+import os
+import subprocess
+from unittest.mock import patch
 from pathlib import Path
 from test_multi_coverage import MODULE as cli
 import test_mock_end_to_end as mock
@@ -22,6 +25,56 @@ class ReviewRegressionTests(unittest.TestCase):
         return [*self.base_run(output), "--binners", "metabat2",
                 "--qc-tools", "eukcc", "--decision-qc", "eukcc",
                 "--eukcc-db", str(self.eukcc_db)]
+
+    def test_remag_gpu_probes_the_backend_environment(self):
+        info = {"device": "cuda", "torch_version": "test", "cuda_version": "12.4", "gpu_name": "mock GPU"}
+        for environment, selector in (("remag-gpu", "-n"), ("/env/remag-gpu", "-p")):
+            with patch.dict(os.environ, {"EUKBINMINER_REMAG_ENV": environment,
+                                        "EUKBINMINER_CONDA_EXE": "/mock/conda"}, clear=True):
+                with patch.object(cli.subprocess, "run", return_value=subprocess.CompletedProcess(
+                        [], 0, json.dumps(info), "")) as run:
+                    self.assertEqual(cli.require_remag_cuda(), info)
+                    self.assertEqual(run.call_args.args[0][:6],
+                                     ["/mock/conda", "run", "--no-capture-output", selector, environment, "python"])
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(cli.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps(info), "")) as run:
+                cli.require_remag_cuda()
+                self.assertEqual(run.call_args.args[0][:2], ["python", "-c"])
+
+    def test_remag_gpu_rejects_cpu_and_probe_errors(self):
+        for result in (subprocess.CompletedProcess([], 2, '{"device":"cpu"}', ""),
+                       subprocess.CompletedProcess([], 0, '{"device":"cpu"}', ""),
+                       subprocess.CompletedProcess([], 1, "", "No module named torch")):
+            with patch.object(cli.subprocess, "run", return_value=result):
+                with self.assertRaises(cli.UserError):
+                    cli.require_remag_cuda()
+        with patch.object(cli.subprocess, "run", side_effect=subprocess.TimeoutExpired("probe", 60)):
+            with self.assertRaises(cli.UserError):
+                cli.require_remag_cuda()
+
+    def test_remag_gpu_fails_before_output_creation(self):
+        output = self.root / "gpu-unavailable"
+        args = cli.build_parser().parse_args([*self.base_run(output), "--remag-gpu"])
+        with patch.object(cli, "require_remag_cuda", side_effect=cli.UserError("CUDA unavailable")):
+            with self.assertRaisesRegex(cli.UserError, "CUDA unavailable"):
+                cli.run_workflow(args)
+        self.assertFalse(output.exists())
+
+    def test_remag_gpu_requires_remag_and_doctor_reports_device(self):
+        output = self.root / "gpu-wrong-binner"
+        args = cli.build_parser().parse_args([*self.arguments(output), "--remag-gpu"])
+        with self.assertRaisesRegex(cli.UserError, "requires remag"):
+            cli.validate_args(args)
+        args = cli.build_doctor_parser().parse_args(["--binners", "remag", "--remag-gpu",
+                "--qc-tools", "eukcc", "--eukcc-db", str(self.eukcc_db)])
+        with patch.object(cli.shutil, "which", return_value="/mock/tool"):
+            with patch.object(cli, "require_remag_cuda", return_value={"device": "cuda"}):
+                report = cli.doctor_report(args)
+                self.assertTrue(report["ok"])
+                self.assertTrue(next(r for r in report["checks"] if r["name"] == "ReMAG CUDA")["ok"])
+            with patch.object(cli, "require_remag_cuda", side_effect=cli.UserError("CUDA unavailable")):
+                self.assertFalse(cli.doctor_report(args)["ok"])
 
     def test_default_and_all_run_four_binners_without_taxonomy(self):
         expected = ["remag", "concoct", "metabat2", "vamb"]

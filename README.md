@@ -97,6 +97,32 @@ The old `eukmagminer` executable remains as a deprecated compatibility alias
 for existing scripts. New commands, documentation, summaries, and package
 metadata use `EukBinMiner`/`eukbinminer`.
 
+## ReMAG GPU acceleration
+
+ReMAG 0.4.4 natively selects CUDA, then Apple MPS, then CPU. EukBinMiner
+preserves this behavior. Use --remag-gpu to require CUDA: the workflow checks
+the actual ReMAG environment before creating its output directory and fails
+if CUDA is unavailable. The doctor command accepts the same flag. Device,
+GPU name, PyTorch version and CUDA build are recorded in config/run.json.
+
+Both a CUDA-enabled PyTorch build and an allocated NVIDIA GPU are required.
+The existing envs/remag.yml does not guarantee a CUDA-enabled PyTorch build.
+For separate environments, point EUKBINMINER_REMAG_ENV to the validated GPU
+environment. The flag does not install software or allocate a GPU. Other
+binners retain their existing device behavior.
+
+Run inside a GPU allocation and preserve the scheduler's CUDA_VISIBLE_DEVICES:
+
+    export EUKBINMINER_REMAG_ENV=/path/to/validated-remag-gpu
+    eukbinminer --sample sample1 --contigs euk_contigs.fna --depth depth.tsv --output sample1_bins --qc-tools eukcc --eukcc-db /path/to/eukcc_db --remag-gpu
+
+CUDA accelerates neural-network training; feature extraction, clustering and
+QC still require time. CPU and GPU runs need not produce identical bins,
+even with the same seed. Record device changes separately in benchmarks.
+Interface validation uses synthetic/mock tests; actual GPU speed and memory
+requirements still require a representative GPU run.
+See the [official GPU instructions](https://github.com/danielzmbp/remag#gpu-acceleration).
+
 ## Reference databases
 
 Pass the unpacked database directories directly:
@@ -257,6 +283,8 @@ release are validated by software regression tests.
 
 ## Review changes
 
+- Version 0.1.4: add --remag-gpu to require native ReMAG CUDA, with environment
+  checks and recorded device/build information.
 - Version 0.1.3: report final-bin shared contig length and fraction without
   changing selection or recovering additional bins.
 

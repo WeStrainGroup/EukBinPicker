@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import IO, Iterable, Optional, Sequence
 
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 TOOL_NAME = "EukBinMiner"
 CLI_NAME = "eukbinminer"
 BINNERS = ("remag", "concoct", "metabat2", "vamb")
@@ -545,9 +545,43 @@ def directory_state(path: Optional[Path], required: Sequence[str]) -> dict[str, 
     }
 
 
+def require_remag_cuda() -> dict[str, object]:
+    """Probe the same Conda environment used by the native ReMAG backend."""
+    environment = environment_value("REMAG_ENV")
+    command = ["python"]
+    if environment:
+        command = [environment_value("CONDA_EXE") or "conda", "run", "--no-capture-output",
+                   "-p" if environment.startswith("/") else "-n", environment, "python"]
+    probe = (
+        "import json, sys, torch; from remag.utils import get_torch_device; "
+        "device = get_torch_device(); "
+        "info = dict(device=device.type, torch_version=torch.__version__, "
+        "cuda_version=torch.version.cuda, "
+        "gpu_name=torch.cuda.get_device_name(0) if device.type == 'cuda' else None); "
+        "print(json.dumps(info)); "
+        "sys.exit(0 if device.type == 'cuda' and torch.cuda.is_available() else 2)"
+    )
+    try:
+        result = subprocess.run([*command, "-c", probe], text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                check=False, timeout=60)
+        if result.returncode:
+            detail = (result.stderr.strip() or result.stdout.strip())[-800:]
+            raise UserError("--remag-gpu requires CUDA-enabled PyTorch and a visible allocated "
+                            f"NVIDIA GPU in the ReMAG environment. Probe failed: {detail}")
+        info = json.loads(result.stdout)
+        if info.get("device") != "cuda":
+            raise UserError("--remag-gpu: ReMAG did not select CUDA")
+        return info
+    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+        raise UserError(f"--remag-gpu CUDA check failed: {error}") from error
+
+
 def doctor_report(args: argparse.Namespace) -> dict[str, object]:
     binners = parse_choices(args.binners, BINNERS, "binners")
     qc_tools = parse_choices(args.qc_tools, QC_TOOLS, "QC tools")
+    if args.remag_gpu and "remag" not in binners:
+        raise UserError("--remag-gpu requires remag in --binners")
 
     checks: list[dict[str, object]] = []
 
@@ -576,6 +610,13 @@ def doctor_report(args: argparse.Namespace) -> dict[str, object]:
     add_executable("seqkit", "seqkit")
     for tool in (*binners, *qc_tools):
         add_executable(tool, tool)
+
+    if args.remag_gpu:
+        try:
+            device = require_remag_cuda()
+            checks.append({"kind": "device", "name": "ReMAG CUDA", "ok": True, **device})
+        except UserError as error:
+            checks.append({"kind": "device", "name": "ReMAG CUDA", "ok": False, "error": str(error)})
 
     databases: dict[str, dict[str, object]] = {}
     if "eukcc" in qc_tools:
@@ -1005,6 +1046,8 @@ def materialize_representatives(
 
 def validate_args(args: argparse.Namespace) -> None:
     args.binner_list = parse_choices(args.binners, BINNERS, "binners")
+    if args.remag_gpu and "remag" not in args.binner_list:
+        raise UserError("--remag-gpu requires remag in --binners")
     args.qc_list = parse_choices(args.qc_tools, QC_TOOLS, "QC tools")
     if args.decision_qc not in args.qc_list:
         raise UserError("--decision-qc must also occur in --qc-tools")
@@ -1115,6 +1158,7 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
             "total_avg_depth_policy"
         ],
         "binners": list(args.binner_list),
+        "remag_gpu": args.remag_gpu,
         "qc_tools": list(args.qc_list),
         "decision_qc": args.decision_qc,
         "random_seed": args.random_seed,
@@ -1186,6 +1230,7 @@ def complete_empty_input_workflow(
         "sample": args.sample,
         "minimum_bp_inclusive": args.qc_min_bin_bp,
         "binners": list(args.binner_list),
+        "remag_gpu": args.remag_gpu,
         "branch_state": {
             binner: "not_run_empty_input" for binner in args.binner_list
         },
@@ -1287,6 +1332,7 @@ def complete_empty_input_workflow(
 
 def run_workflow(args: argparse.Namespace) -> None:
     validate_args(args)
+    args.remag_cuda = require_remag_cuda() if args.remag_gpu else None
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     with (out / ".run.lock").open("a") as lock:
@@ -1341,6 +1387,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         runtime["depth_path"] = str(depth_inputs[0].path)
         runtime["depth_sha256"] = sha256_file(depth_inputs[0].path)
     runtime["threads"] = args.threads
+    runtime["remag_cuda"] = args.remag_cuda
     runtime["backend_environments"] = {
         name: environment_value(name)
         for name in ("CONDA_EXE", "REMAG_ENV", "CONCOCT_ENV", "METABAT2_ENV",
@@ -1771,6 +1818,10 @@ def add_workflow_arguments(
             "all or a comma-separated subset of "
             "remag,concoct,metabat2,vamb (default: all four)"
         ),
+    )
+    workflow.add_argument(
+        "--remag-gpu", action="store_true",
+        help="require native ReMAG CUDA; fail if unavailable (default: native automatic device selection)",
     )
     workflow.add_argument(
         "--qc-tools",
