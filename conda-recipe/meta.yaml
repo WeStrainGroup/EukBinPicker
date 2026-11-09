@@ -1,5 +1,5 @@
 {% set name = "eukbinminer" %}
-{% set version = "0.1.4" %}
+{% set version = "0.2.0" %}
 
 package:
   name: {{ name }}
@@ -29,6 +29,7 @@ requirements:
     - concoct =1.1.0
     - biopython
     - metabat2 =2.18_23_gc869c52
+    - samtools>=1.17
     - vamb =5.0.4
     - seqkit
     - eukcc =2.1.3

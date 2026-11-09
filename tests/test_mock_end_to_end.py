@@ -130,6 +130,12 @@ elif name == "metabat2":
         expected_seed = os.environ.get("MOCK_EXPECTED_SEED")
         if expected_seed is not None and value("--seed") != expected_seed:
             raise SystemExit("unexpected MetaBAT2 random seed")
+        table = Path(value("-a")).read_text().splitlines()
+        if "--cvExt" in args:
+            if "-var" in table[0] or "contigLen" in table[0] or "NA" in table[1:]:
+                raise SystemExit("invalid native mean-only table")
+        elif "-var" not in table[0] or any("NA" in row.split("\t") for row in table[1:]):
+            raise SystemExit("invalid observed variance table")
         source = value("-i")
         prefix = Path(value("-o"))
         write_fasta(
@@ -609,7 +615,7 @@ class MockEndToEndTests(unittest.TestCase):
             "contigName\tcontigLen\ttotalAvgDepth\talpha\talpha-var\t"
             "beta\tbeta-var",
         )
-        self.assertEqual(normalized[1], "c1\t100\t33\t3\t0\t30\t0")
+        self.assertEqual(normalized[1], "c1\t100\t33\t3\tNA\t30\tNA")
 
         preflight = output / "results" / "standalone" / "sample1" / "preflight"
         self.assertEqual(
@@ -734,7 +740,7 @@ class MockEndToEndTests(unittest.TestCase):
             "contigName\tcontigLen\ttotalAvgDepth\tdonor_A\tdonor_A-var\t"
             "donor_B\tdonor_B-var\tdonor_C\tdonor_C-var",
         )
-        self.assertEqual(normalized[1], "c1\t100\t333\t3\t0\t30\t0\t300\t0")
+        self.assertEqual(normalized[1], "c1\t100\t333\t3\tNA\t30\tNA\t300\tNA")
         preflight = output / "results" / "standalone" / "sample1" / "preflight"
         self.assertEqual(
             (preflight / "union.concoct.coverage.tsv")

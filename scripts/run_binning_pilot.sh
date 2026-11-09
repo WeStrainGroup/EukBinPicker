@@ -317,6 +317,11 @@ write_branch_fingerprint() {
         )
     fi
 
+    if [[ "$binner" == "concoct" && -n "${BAM_LIST:-}" ]]; then
+        fingerprint_args+=(--file "bam_list=${BAM_LIST}" --file "bam_metadata=${BAM_METADATA}")
+    fi
+    fingerprint_args+=(--file "depth_adapter=${SCRIPT_DIR}/depth_schema.py")
+
     case "$binner" in
         remag)
             coverage_path="$CONCOCT_COVERAGE"
@@ -479,14 +484,19 @@ run_remag() {
 run_metabat2() {
     local stage_dir="$1"
     mkdir -p "${stage_dir}/bins"
-    run_in_env "$METABAT2_ENV" metabat2 \
-        -i "$INPUT_FASTA" \
-        -a "$METABAT_DEPTH" \
-        -o "${stage_dir}/bins/${SAMPLE}.metabat2" \
-        -m "$METABAT2_MIN_CONTIG" \
-        -s "$MIN_BIN_SIZE" \
-        --seed "$RANDOM_SEED" \
-        -t "$THREADS"
+    local depth_mode
+    depth_mode="$("$PYTHON_EXE" "${SCRIPT_DIR}/depth_schema.py" \
+        "$METABAT_DEPTH" "${stage_dir}/depth.tsv")"
+    local -a command=(metabat2
+        -i "$INPUT_FASTA"
+        -a "${stage_dir}/depth.tsv"
+        -o "${stage_dir}/bins/${SAMPLE}.metabat2"
+        -m "$METABAT2_MIN_CONTIG"
+        -s "$MIN_BIN_SIZE"
+        --seed "$RANDOM_SEED"
+        -t "$THREADS")
+    [[ "$depth_mode" != "means" ]] || command+=(--cvExt)
+    run_in_env "$METABAT2_ENV" "${command[@]}"
     if ! run_in_env "$METABAT2_ENV" metabat2 --help \
         > "${stage_dir}/tool_version.txt" 2>&1; then
         printf 'MetaBAT2 completed, but its help/version probe returned non-zero.\n' \
@@ -515,6 +525,15 @@ run_concoct() {
         -b "${stage_dir}/contigs_10K.bed" \
         > "${stage_dir}/contigs_10K.fa"
 
+    if [[ -n "${BAM_LIST:-}" ]]; then
+        local -a bams=()
+        local bam
+        while IFS= read -r bam; do bams+=("$bam"); done < "$BAM_LIST"
+        run_in_env "$CONCOCT_ENV" concoct_coverage_table.py \
+            "${stage_dir}/contigs_10K.bed" "${bams[@]}" \
+            > "${stage_dir}/fragment_coverage.tsv"
+    else
+        # Table-only input approximates each fragment by its parent mean.
     awk '
         BEGIN { FS = OFS = "\t" }
         NR == FNR {
@@ -558,6 +577,7 @@ run_concoct() {
         }
     ' "$CONCOCT_COVERAGE" "${stage_dir}/contigs_10K.bed" \
         > "${stage_dir}/fragment_coverage.tsv"
+    fi
 
     fragment_count="$(awk '/^>/{n += 1} END{print n + 0}' "${stage_dir}/contigs_10K.fa")"
     eligible_fragment_count="$(
@@ -620,9 +640,8 @@ run_concoct() {
         --composition_file "${stage_dir}/contigs_10K.fa" \
         --coverage_file "${stage_dir}/fragment_coverage.tsv")
     if ((coverage_column_count == 1)); then
-        # Row normalization erases a single dimension.  Keep the historical
-        # single-depth behavior, but use CONCOCT defaults for multi-sample
-        # differential coverage.
+        # Preserve the single-column policy. Native defaults also retain a
+        # total-coverage feature; this policy is not a proven improvement.
         concoct_command+=(--no_cov_normalization --no_total_coverage)
     fi
     concoct_command+=( \

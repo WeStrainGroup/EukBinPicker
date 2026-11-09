@@ -55,8 +55,8 @@ class MultiCoverageTests(unittest.TestCase):
             [
                 "contigName\tcontigLen\ttotalAvgDepth\talpha\talpha-var\t"
                 "beta\tbeta-var\tgamma\tgamma-var",
-                "c1\t4\t6\t1\t0\t2\t0\t3\t0",
-                "c2\t4\t15\t4\t0\t5\t0\t6\t0",
+                "c1\t4\t6\t1\tNA\t2\tNA\t3\tNA",
+                "c2\t4\t15\t4\tNA\t5\tNA\t6\tNA",
             ],
         )
         self.assertEqual(summary["coverage_columns"], ["alpha", "beta", "gamma"])
@@ -107,8 +107,8 @@ class MultiCoverageTests(unittest.TestCase):
             [
                 "contigName\tcontigLen\ttotalAvgDepth\talpha\talpha-var\t"
                 "beta\tbeta-var",
-                "c1\t4\t4\t1\t0\t3\t0",
-                "c2\t4\t6\t2\t0\t4\t0",
+                "c1\t4\t4\t1\tNA\t3\tNA",
+                "c2\t4\t6\t2\tNA\t4\tNA",
             ],
         )
         self.assertEqual(summary["depth_source_count"], 2)
@@ -203,8 +203,8 @@ class MultiCoverageTests(unittest.TestCase):
             "jgi.tsv",
             "contigName\tcontigLen\ttotalAvgDepth\talpha\talpha-var\t"
             "beta\tbeta-var\n"
-            "c1\t4\t4\t1\t0\t3\t0\n"
-            "c2\t4\t6\t2\t0\t4\t0\n",
+            "c1\t4\t4\t1\tNA\t3\tNA\n"
+            "c2\t4\t6\t2\tNA\t4\tNA\n",
         )
         output = self.root / "filtered"
         self.assertEqual(filter_inputs(fasta, depth, "assembly", 4, output), "created")

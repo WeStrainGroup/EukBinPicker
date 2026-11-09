@@ -391,7 +391,7 @@ def _write_depth_products(
                     schema.coverage_names,
                     schema.variance_indices,
                 ):
-                    if variance_index is not None:
+                    if variance_index is not None and fields[variance_index] != "NA":
                         _parse_nonnegative_value(
                             fields[variance_index],
                             contig_id,

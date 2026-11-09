@@ -49,9 +49,9 @@ and is recorded in run metadata and every binner branch fingerprint.
 | --- | --- |
 | Input | Retain contigs at least 1,500 bp by default. Every retained contig must have coverage in each supplied mapping dimension. |
 | ReMAG | Short-read mode, bacterial filtering skipped, seed 6311. The supplied contigs define the candidate input set. |
-| CONCOCT | Cut into 10-kb fragments with the last fragment merged. Each fragment inherits its parent contig coverage. Start with half the eligible fragment count, bounded to 2–400 clusters. Fewer than two eligible fragments produce zero bins. |
+| CONCOCT | Cut into 10-kb fragments with the last fragment merged. BAM input uses native fragment coverage; table input approximates fragments by the parent mean. Start with half the eligible fragment count, bounded to 2–400 clusters. Fewer than two eligible fragments produce zero bins. |
 | CONCOCT coverage | One dimension disables coverage normalization and total coverage. Multiple dimensions use CONCOCT's differential-coverage defaults. |
-| MetaBAT2 | Uses the JGI mean/variance pairs. Generic coverage input supplies zero variance placeholders. |
+| MetaBAT2 | Preserves observed JGI mean/variance pairs. Mean-only input uses native `--cvExt`; missing variance is never filled with zero. |
 | VAMB | Default training schedule, bin splitting disabled, seed applied before model import. All-zero coverage columns are removed and recorded. |
 | Raw bins | Minimum retained size defaults to 1 bp. Bins at least 500,000 bp enter QC by default. |
 | EukCC | Native completeness and contamination estimates. Verified no-marker or empty-protein outcomes retain an unassessed status. |
@@ -213,7 +213,7 @@ representative ordering. Contigs enter binning when their length is greater
 than or equal to `--min-contig-bp` (default 1500 bp).
 `--random-seed` accepts a positive integer and defaults to `6311`.
 If that inclusive filter leaves no eligible contigs, the run writes a
-checksum-bearing, tool-free empty result; it records all requested binners as
+checksum-bearing empty result without running binners or QC; it records all requested binners as
 `not_run_empty_input` rather than claiming that they executed.
 
 Each depth input may be a JGI table, a generic two-column table, or a generic
@@ -224,17 +224,70 @@ valid for a single-coverage file. Without an explicit label, repeated generic
 files use a meaningful coverage header when present and otherwise infer the
 dimension name from the filename. Input order and column order are preserved.
 
-The canonical JGI table retains all sample depth/variance pairs. For generic
-input, variance is zero and `totalAvgDepth` is the sum of all coverage
-dimensions; a single JGI input keeps its supplied `totalAvgDepth`. MetaBAT2
-receives the complete JGI table. CONCOCT receives every depth column. VAMB receives the nonzero
-coverage dimensions, with all-zero columns recorded in input metadata. ReMAG 0.4.4 receives one headerless TSV per coverage dimension through
-repeated `-c` options, matching its native multi-sample interface. CONCOCT's
-single-dimension normalization workaround remains unchanged, while two or
-more dimensions use CONCOCT's default differential-coverage normalization.
+Observed variance is retained exactly. When no variance is supplied, the internal
+canonical table records `NA`; MetaBAT2 receives only IDs and means through its
+native `--cvExt` interface. This delegates the mean-only model to MetaBAT2 and
+does not create observed variances. Mixed observed/missing variance across
+samples is rejected when MetaBAT2 is selected: supply all variance columns or
+omit MetaBAT2. Generic `totalAvgDepth` is the sum of coverage dimensions; a single
+JGI input retains its supplied total. VAMB, ReMAG and CONCOCT use the sample
+means. VAMB records and drops all-zero dimensions. ReMAG receives one headerless
+TSV per dimension through repeated `-c` options.
+
+For custom tables, select the ID, mean columns and optional paired variance
+columns explicitly; unrelated columns are ignored:
+
+```bash
+eukbinminer --sample assembly --contigs contigs.fa --depth custom.tsv \
+  --contig-column sequence_id --coverage-columns A_mean,B_mean \
+  --variance-columns A_var,B_var --output output \
+  --qc-tools eukcc --eukcc-db /path/to/eukcc_db
+```
+
+Omit `--variance-columns` if unavailable. The lists pair by position. FASTA
+provides contig lengths; any supplied `contigLen` is checked. Standard JGI tables
+need no column selectors. The same selectors apply to every repeated table.
+
+Alternatively, supply **one coordinate-sorted, indexed BAM per sample**:
+
+```bash
+eukbinminer --sample assembly --contigs eukaryotic_contigs.fa \
+  --bam mapping/sample_A.bam --bam mapping/sample_B.bam \
+  --output output --qc-tools eukcc --eukcc-db /path/to/eukcc_db
+```
+
+`--bam` and `--depth` are mutually exclusive. BAM mode requires `samtools` and
+`jgi_summarize_bam_contig_depths` on PATH (or in `EUKBINMINER_METABAT2_ENV`), even
+when MetaBAT2 is not selected. Every BAM needs a nonempty `.bai` or `.csi` index,
+a unique basename, coordinate-sort declaration and the same ordered reference
+ID/length dictionary. BAMs may map against the complete assembly before ECM:
+all input FASTA IDs and lengths must match that reference. EBM checks sequence
+MD5 against BAM `M5` tags where available. Without those tags, IDs and lengths
+cannot establish sequence identity; the user must ensure the FASTA came from
+the mapped assembly. BAMs and indexes must remain immutable during a run.
+
+EBM reuses these BAMs without remapping. Native JGI computes contig mean and
+variance with 97% identity, minimum mapping quality 0 and native edge exclusion
+(maximum 75 bases). CONCOCT cuts the input internally and obtains fragment means
+using its native `concoct_coverage_table.py` (`samtools bedcov` divided by interval
+length). These tools have different native read/position filtering semantics;
+fragment means are not expected to reproduce JGI means exactly.
+
+With table-only input, CONCOCT fragments inherit their parent's mean as an
+explicit approximation. Means and variances cannot recover positional coverage.
+For one coverage dimension EBM retains `--no_cov_normalization
+--no_total_coverage`; multiple dimensions use native defaults. Native CONCOCT
+also retains total coverage by default, so the single-dimension policy is not
+claimed to fix lost information or improve accuracy without comparison.
+
+`validate` checks BAM inputs and indexes but does not run full coverage
+calculation. Resume records resolved BAM paths, sizes, modification times and
+header hashes plus index hashes, rather than hashing every BAM. Generated JGI
+coverage has its own checksum. This detects routine input changes but is not a
+cryptographic checksum of the BAM alignment payload.
 
 FASTA IDs, depth IDs, and coverage names must be unique. Rows must have exactly
-the declared number of fields. Every coverage, JGI variance, and
+the declared number of fields. Every supplied coverage, observed variance, and
 `totalAvgDepth` value must be finite and non-negative, and any supplied
 `contigLen` must match the FASTA. Duplicate depth IDs are fatal even when rows
 are identical. Production adapters may canonicalize read-only legacy inputs,
@@ -282,6 +335,13 @@ Historical real-data runs use frozen versions. The changes in this source
 release are validated by software regression tests.
 
 ## Review changes
+
+- Version 0.2.0: add BAM or table coverage input, explicit custom column selection,
+  native CONCOCT fragment coverage from BAM and native MetaBAT2 mean-only input.
+  Missing variance is no longer fabricated. Current CAMI benchmark uses frozen
+  pre-0.2.0 code and is not retroactively updated: its standalone CONCOCT uses
+  BAM fragment coverage, whereas EBM inherits contig means. That benchmark
+  compares full implementations, not only the final bin-selection strategy.
 
 - Version 0.1.4: add --remag-gpu to require native ReMAG CUDA, with environment
   checks and recorded device/build information.

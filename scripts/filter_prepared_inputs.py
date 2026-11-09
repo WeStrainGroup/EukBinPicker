@@ -218,7 +218,7 @@ def parse_depth(
                             f"coverage {name!r} must be finite and "
                             f"non-negative for {identifier}"
                         )
-                    if variance_index is not None:
+                    if variance_index is not None and fields[variance_index] != "NA":
                         variance_text = fields[variance_index]
                         try:
                             variance_value = float(variance_text)

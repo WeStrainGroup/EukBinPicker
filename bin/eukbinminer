@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import IO, Iterable, Optional, Sequence
 
 
-VERSION = "0.1.4"
+VERSION = "0.2.0"
 TOOL_NAME = "EukBinMiner"
 CLI_NAME = "eukbinminer"
 BINNERS = ("remag", "concoct", "metabat2", "vamb")
@@ -48,6 +48,7 @@ ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
 from depth_schema import DepthSchemaError, identify_depth_schema
+from bam_inputs import validate_bams, calculate_depth
 
 
 class UserError(ValueError):
@@ -229,6 +230,7 @@ def normalized_depth_inputs(
     inputs: Sequence[DepthInput],
     contig_lengths: OrderedDict[str, int],
     sample: str,
+    **column_options,
 ) -> tuple[str, dict[str, object]]:
     """Combine one or more generic/JGI inputs into one canonical JGI table."""
 
@@ -243,6 +245,7 @@ def normalized_depth_inputs(
     }
     coverage_names: list[str] = []
     coverage_source_names: list[str] = []
+    variance_available: list[bool] = []
     source_metadata: list[dict[str, object]] = []
     combined_values: dict[str, list[str]] = {
         identifier: [] for identifier in contig_lengths
@@ -267,7 +270,7 @@ def normalized_depth_inputs(
                     raise UserError(f"depth table is empty: {source}")
                 columns = raw_header.rstrip("\r\n").split("\t")
                 try:
-                    schema = identify_depth_schema(columns, sample)
+                    schema = identify_depth_schema(columns, sample, **column_options)
                 except DepthSchemaError as error:
                     raise UserError(f"{source}: {error}") from error
                 if depth_input.label is not None:
@@ -295,6 +298,7 @@ def normalized_depth_inputs(
                             columns,
                             sample,
                             single_coverage_name=override_name,
+                            **column_options,
                         )
                     except DepthSchemaError as error:
                         raise UserError(f"{source}: {error}") from error
@@ -362,7 +366,7 @@ def normalized_depth_inputs(
                         schema.variance_indices,
                     ):
                         if variance_index is None:
-                            variance_values.append("0")
+                            variance_values.append("NA")
                             continue
                         variance_text = fields[variance_index]
                         _nonnegative_depth_value(
@@ -432,6 +436,7 @@ def normalized_depth_inputs(
             combined_values[identifier].extend(values)
             combined_numeric[identifier].extend(numeric_values)
             combined_variances[identifier].extend(variances)
+        variance_available.extend(i is not None for i in schema.variance_indices)
         coverage_names.extend(schema.coverage_names)
         coverage_source_names.extend(schema.source_coverage_names)
         extra_rows += source_extra_rows
@@ -480,6 +485,7 @@ def normalized_depth_inputs(
         "coverage_source_columns": coverage_source_names,
         "coverage_columns": coverage_names,
         "coverage_column_count": len(coverage_names),
+        "variance_available": variance_available,
         "total_avg_depth_policy": total_policy,
     }
 
@@ -1045,6 +1051,11 @@ def materialize_representatives(
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    selectors = (args.contig_column, args.coverage_columns, args.variance_columns)
+    if args.bam and any(selectors):
+        raise UserError("custom column options apply only to --depth")
+    if any(selectors) and not (args.contig_column and args.coverage_columns):
+        raise UserError("custom tables require --contig-column and --coverage-columns together")
     args.binner_list = parse_choices(args.binners, BINNERS, "binners")
     if args.remag_gpu and "remag" not in args.binner_list:
         raise UserError("--remag-gpu requires remag in --binners")
@@ -1090,20 +1101,42 @@ def validate_args(args: argparse.Namespace) -> None:
         )
 
 
+def depth_column_options(args):
+    return dict(contig_column=args.contig_column,
+                coverage_columns=[x.strip() for x in args.coverage_columns.split(",")] if args.coverage_columns else None,
+                variance_columns=[x.strip() for x in args.variance_columns.split(",")] if args.variance_columns else None)
+
+
 def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
     contigs = args.contigs.resolve()
-    depth_inputs = parse_depth_inputs(args.depth)
+    depth_inputs = parse_depth_inputs(args.depth) if args.depth else ()
     lengths = fasta_lengths(contigs, allow_empty=True)
     eligible_lengths = OrderedDict(
         (identifier, length)
         for identifier, length in lengths.items()
         if length >= args.min_contig_bp
     )
-    depth_text, depth_summary = normalized_depth_inputs(
-        depth_inputs,
-        lengths,
-        args.sample,
-    )
+    bam_summary = {}
+    if args.bam:
+        bam_summary = validate_bams(args.bam, lengths, open_text(contigs),
+                                    environment_value("METABAT2_ENV"),
+                                    environment_value("CONDA_EXE") or "conda")
+        if bam_summary["reference_sequence_check"] != "M5_verified":
+            note("BAM reference M5 is absent for some contigs: ID/length checked; "
+                 "you must ensure the FASTA comes from the mapped assembly")
+        names = [Path(item["path"]).stem for item in bam_summary["bam_inputs"]]
+        depth_text = None
+        depth_summary = dict(contigs=len(lengths), depth_source_count=0, depth_sources=[],
+                             coverage_source_columns=names, coverage_columns=names,
+                             coverage_column_count=len(names), variance_available=[True]*len(names),
+                             total_avg_depth_policy="native_JGI")
+    else:
+        depth_text, depth_summary = normalized_depth_inputs(
+            depth_inputs, lengths, args.sample, **depth_column_options(args))
+        variance = depth_summary["variance_available"]
+        if "metabat2" in args.binner_list and any(variance) and not all(variance):
+            raise UserError("MetaBAT2 cannot mix observed and missing variance; "
+                            "provide all variances or omit metabat2")
     eukcc_db_value = args.eukcc_db or environment_value("EUKCC_DB")
     busco_db_value = args.busco_db or environment_value("BUSCO_DB")
     if "eukcc" in args.qc_list:
@@ -1146,7 +1179,11 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
         "eligible_contigs": len(eligible_lengths),
         "eligible_bp": sum(eligible_lengths.values()),
         "depth_rows": depth_summary["contigs"],
-        "normalized_depth_bytes": len(depth_text.encode("utf-8")),
+        "normalized_depth_bytes": len(depth_text.encode("utf-8")) if depth_text is not None else None,
+        "coverage_input": "bam" if args.bam else "table",
+        "variance_available": depth_summary["variance_available"],
+        "column_options": depth_column_options(args),
+        **bam_summary,
         "depth_source_count": depth_summary["depth_source_count"],
         "depth_sources": depth_summary["depth_sources"],
         "coverage_source_columns": depth_summary[
@@ -1368,7 +1405,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
     input_summary = validate_inputs(args)
     out = args.output.resolve()
     complete = out / ".complete.json"
-    depth_inputs = parse_depth_inputs(args.depth)
+    depth_inputs = parse_depth_inputs(args.depth) if args.depth else ()
     runtime = {
         **input_summary,
         "version": VERSION,
@@ -1446,10 +1483,17 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
     preflight = results_root / args.study / args.sample / "preflight"
     normalized_depth = work / "input" / "depth.jgi.tsv"
     normalized_depth.parent.mkdir(parents=True, exist_ok=True)
+    if args.bam:
+        bam_paths = [Path(item["path"]) for item in input_summary["bam_inputs"]]
+        bam_list = config_dir / "bams.txt"
+        atomic_text(bam_list, "".join(str(path) + "\n" for path in bam_paths))
+        bam_depth = normalized_depth.parent / "bam.depth.tsv"
+        calculate_depth(bam_paths, bam_depth, args.threads,
+                        environment_value("METABAT2_ENV"), environment_value("CONDA_EXE") or "conda")
+        depth_inputs = (DepthInput(bam_depth),)
     depth_text, _ = normalized_depth_inputs(
-        depth_inputs,
-        fasta_lengths(args.contigs.resolve(), allow_empty=True),
-        args.sample,
+        depth_inputs, fasta_lengths(args.contigs.resolve(), allow_empty=True), args.sample,
+        **({} if args.bam else depth_column_options(args)),
     )
     if normalized_depth.exists():
         if normalized_depth.read_text(encoding="utf-8") != depth_text:
@@ -1496,6 +1540,8 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         "SAMPLE": args.sample,
         "CONTIG_FASTA": args.contigs.resolve(),
         "DEPTH_TSV": normalized_depth,
+        "BAM_LIST": config_dir / "bams.txt" if args.bam else "",
+        "BAM_METADATA": run_metadata if args.bam else "",
         "OUT_ROOT": results_root,
         "PIPELINE_DIR": ROOT,
         "PYTHON_EXE": python,
@@ -1874,9 +1920,9 @@ def add_common_arguments(
         metavar="FASTA",
         help="input contig FASTA with unique record IDs",
     )
-    required.add_argument(
+    coverage = required.add_mutually_exclusive_group(required=True)
+    coverage.add_argument(
         "--depth",
-        required=True,
         action="append",
         metavar="[NAME=]TSV",
         help=(
@@ -1885,6 +1931,12 @@ def add_common_arguments(
             "single-coverage file as NAME=TSV"
         ),
     )
+    coverage.add_argument("--bam", action="append", type=Path, metavar="BAM",
+                          help="coordinate-sorted indexed BAM; repeat once per mapped sample (no --depth needed)")
+    columns = parser.add_argument_group("custom coverage table columns")
+    columns.add_argument("--contig-column", metavar="NAME")
+    columns.add_argument("--coverage-columns", metavar="A,B", help="comma-separated mean columns in sample order")
+    columns.add_argument("--variance-columns", metavar="A_VAR,B_VAR", help="optional observed variance columns in the same sample order")
     if include_output:
         required.add_argument(
             "--output",
@@ -1995,7 +2047,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog=CLI_NAME,
         description=(
             "Mine quality-controlled, non-redundant eukaryotic bins from "
-            "contigs and one or more mapped-sample depth tables."
+            "contigs with coverage tables or indexed BAM files."
         ),
         epilog=(
             "Auxiliary commands:\n"
@@ -2030,7 +2082,7 @@ def build_doctor_parser() -> argparse.ArgumentParser:
 def build_validate_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=f"{CLI_NAME} validate",
-        description="Validate inputs and print the resolved run plan without running tools.",
+        description="Validate inputs and print the run plan; BAM validation uses samtools but does not calculate coverage.",
     )
     add_common_arguments(parser, include_output=False)
     parser.set_defaults(command="validate")

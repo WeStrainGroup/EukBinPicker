@@ -88,11 +88,42 @@ def identify_depth_schema(
     *,
     require_jgi: bool = False,
     single_coverage_name: Optional[str] = None,
+    contig_column: Optional[str] = None,
+    coverage_columns: Optional[Sequence[str]] = None,
+    variance_columns: Optional[Sequence[str]] = None,
 ) -> DepthSchema:
     """Return deterministic indexes and names for one depth-table header."""
 
     normalized = _validate_columns(columns)
     column_set = set(normalized)
+    if contig_column is not None or coverage_columns is not None or variance_columns is not None:
+        if not contig_column or not coverage_columns:
+            raise DepthSchemaError("custom tables require --contig-column and --coverage-columns together")
+        if variance_columns is not None and len(variance_columns) != len(coverage_columns):
+            raise DepthSchemaError("variance columns must pair one-to-one with coverage columns in the same order")
+        selected = [contig_column, *coverage_columns, *(variance_columns or ())]
+        if len(set(selected)) != len(selected):
+            raise DepthSchemaError("contig, coverage and variance columns must be distinct")
+        missing = set(selected) - column_set
+        if missing:
+            raise DepthSchemaError("unknown selected column(s): " + ", ".join(sorted(missing)))
+        if "contigLen" in selected:
+            raise DepthSchemaError("contigLen is reserved for FASTA length validation")
+        names = tuple(coverage_columns)
+        if single_coverage_name is not None:
+            if len(names) != 1:
+                raise DepthSchemaError("coverage aliases require exactly one coverage column")
+            names = (single_coverage_name,)
+        _validate_normalized_names(names)
+        return DepthSchema(
+            columns=normalized, id_index=normalized.index(contig_column),
+            length_index=normalized.index("contigLen") if "contigLen" in column_set else None,
+            total_index=None, coverage_names=names,
+            source_coverage_names=tuple(coverage_columns),
+            coverage_indices=tuple(normalized.index(x) for x in coverage_columns),
+            variance_indices=tuple(normalized.index(x) for x in variance_columns) if variance_columns else tuple(None for _ in names),
+            source_format="custom_coverage", total_avg_depth_policy="sum_of_coverage_columns",
+        )
     is_jgi = all(column in column_set for column in JGI_CORE_COLUMNS)
 
     if is_jgi:
@@ -211,3 +242,36 @@ def identify_depth_schema(
         source_format=source_format,
         total_avg_depth_policy="sum_of_coverage_columns",
     )
+
+
+def write_metabat_depth(source, destination):
+    """Keep observed JGI variance, or write MetaBAT2's native mean-only format."""
+    import csv
+    from pathlib import Path
+    with Path(source).open() as handle:
+        reader = csv.reader(handle, delimiter="\t")
+        header = next(reader)
+        schema = identify_depth_schema(header, "input", require_jgi=True)
+        rows = list(reader)
+    present = {row[index] != "NA" if index is not None else False
+               for row in rows for index in schema.variance_indices}
+    if len(present) > 1:
+        raise DepthSchemaError("MetaBAT2 cannot mix observed and missing variance; provide all variances or omit metabat2")
+    if present == {True}:
+        import shutil
+        shutil.copyfile(source, destination)
+        return "jgi"
+    with Path(destination).open("w") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(["contigName", *schema.coverage_names])
+        for row in rows:
+            writer.writerow([row[schema.id_index], *(row[i] for i in schema.coverage_indices)])
+    return "means"
+
+
+if __name__ == "__main__":
+    import sys
+    try:
+        print(write_metabat_depth(sys.argv[1], sys.argv[2]))
+    except (ValueError, OSError) as error:
+        sys.exit(str(error))
