@@ -26,7 +26,7 @@ class ReferenceDatasetCliTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("deprecated compatibility alias", completed.stderr)
 
-    def test_validate_reports_explicit_qc_reference_datasets(self) -> None:
+    def test_run_records_explicit_qc_reference_datasets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fasta = root / "contigs.fa"
@@ -46,15 +46,17 @@ class ReferenceDatasetCliTests(unittest.TestCase):
                 [
                     sys.executable,
                     str(CLI),
-                    "validate",
+                    "--output", str(root / "output"),
                     "--sample",
                     "sample_1",
                     "--contigs",
                     str(fasta),
-                    "--depth",
+                    "--coverage",
                     str(depth),
                     "--binners",
                     "metabat2",
+                    "--qc-tools",
+                    "all",
                     "--eukcc-db",
                     str(eukcc_db),
                     "--busco-db",
@@ -67,7 +69,7 @@ class ReferenceDatasetCliTests(unittest.TestCase):
             )
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            plan = json.loads(completed.stdout)
+            plan = json.loads((root / "output/config/run.json").read_text())
             references = plan["qc_references"]
             self.assertEqual(references["eukcc_db"], str(eukcc_db.resolve()))
             self.assertEqual(references["busco_db"], str(busco_db.resolve()))
@@ -82,6 +84,10 @@ class ReferenceDatasetCliTests(unittest.TestCase):
             legacy = root / "legacy"
             preferred.mkdir()
             legacy.mkdir()
+            fasta = root / "contigs.fa"
+            depth = root / "depth.tsv"
+            fasta.write_text(">c1\nAAAA\n")
+            depth.write_text("contig_id\tdepth\nc1\t1\n")
             environment = dict(os.environ)
             environment["EUKBINMINER_EUKCC_DB"] = str(preferred)
             environment["EUKMAGMINER_EUKCC_DB"] = str(legacy)
@@ -89,7 +95,10 @@ class ReferenceDatasetCliTests(unittest.TestCase):
                 [
                     sys.executable,
                     str(CLI),
-                    "doctor",
+                    "--sample", "s",
+                    "--contigs", str(fasta),
+                    "--coverage", str(depth),
+                    "--output", str(root / "output"),
                     "--binners",
                     "metabat2",
                     "--qc-tools",
@@ -101,9 +110,10 @@ class ReferenceDatasetCliTests(unittest.TestCase):
                 stderr=subprocess.PIPE,
                 env=environment,
             )
-            report = json.loads(completed.stdout)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            report = json.loads((root / "output/config/run.json").read_text())
             self.assertEqual(
-                report["databases"]["eukcc"]["path"],
+                report["qc_references"]["eukcc_db"],
                 str(preferred.resolve()),
             )
 

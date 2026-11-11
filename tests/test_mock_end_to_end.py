@@ -91,6 +91,8 @@ elif name == "seqkit":
                 break
         print(f"{Path(raw_path).resolve()}\t{len(lengths)}\t{total}\t{n50}\t{max(lengths)}")
 elif name == "remag":
+    if "--min-bin-size" in args or "-m" in args:
+        raise SystemExit("ReMAG native defaults overridden")
     if "--version" in args:
         print("remag 0.4.4")
     else:
@@ -124,6 +126,8 @@ elif name == "remag":
         )
         write_fasta(out / "bins" / "remag-bin.fa", binner_records(source, "remag"))
 elif name == "metabat2":
+    if "-s" in args:
+        raise SystemExit("MetaBAT2 native bin minimum overridden")
     if "--help" in args:
         print("MetaBAT 2.18")
     else:
@@ -170,15 +174,8 @@ elif name in {
                 observed_columns = header.split("\t")[1:]
                 if observed_columns != expected_columns.split(","):
                     raise SystemExit("unexpected CONCOCT coverage columns")
-            coverage_count = len(header.split("\t")) - 1
-            disabled = (
-                "--no_cov_normalization" in args
-                and "--no_total_coverage" in args
-            )
-            if coverage_count == 1 and not disabled:
-                raise SystemExit("single-column CONCOCT normalization was not disabled")
-            if coverage_count > 1 and disabled:
-                raise SystemExit("multi-column CONCOCT normalization was disabled")
+            if any(flag in args for flag in ("--no_cov_normalization", "--no_total_coverage", "--clusters")):
+                raise SystemExit("CONCOCT native defaults were overridden")
             out = Path(value("-b"))
             out.mkdir(parents=True, exist_ok=True)
             threshold = value("--length_threshold")
@@ -380,35 +377,20 @@ class MockEndToEndTests(unittest.TestCase):
             "sample1",
             "--contigs",
             str(self.fasta),
-            "--depth",
+            "--coverage",
             str(self.depth),
             "--output",
             str(output),
-            "--retain-min-bin-bp",
+            "--min-retain-length",
             "1",
-            "--qc-min-bin-bp",
+            "--min-selection-length",
             "1",
-            "--min-contig-bp",
+            "--min-input-length",
             "1",
             "--threads",
             "1",
         ]
 
-    def test_doctor_checks_current_environment_and_databases(self) -> None:
-        completed = self.run_cli(
-            "doctor",
-            "--binners",
-            "remag,concoct,metabat2,vamb",
-            "--eukcc-db",
-            str(self.eukcc_db),
-            "--busco-db",
-            str(self.busco_db),
-        )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        report = json.loads(completed.stdout)
-        self.assertTrue(report["ok"])
-        self.assertEqual(report["tool"], "EukBinMiner")
-        self.assertEqual(report["execution_mode"], "current_environment_path")
     def test_configured_split_conda_environments_reach_backends(self) -> None:
         output = self.root / "split-conda-environments"
         configured = {
@@ -427,7 +409,7 @@ class MockEndToEndTests(unittest.TestCase):
             "remag",
             "--qc-tools",
             "all",
-            "--decision-qc",
+            "--qc-decision",
             "eukcc",
             "--eukcc-db",
             str(self.eukcc_db),
@@ -447,13 +429,13 @@ class MockEndToEndTests(unittest.TestCase):
             "remag,concoct,metabat2",
             "--qc-tools",
             "all",
-            "--decision-qc",
+            "--qc-decision",
             "busco",
             "--eukcc-db",
             str(self.eukcc_db),
             "--busco-db",
             str(self.busco_db),
-            "--overlap-threshold",
+            "--min-overlap",
             "0.50",
             mock_bin_mode="half",
         )
@@ -497,11 +479,11 @@ class MockEndToEndTests(unittest.TestCase):
             "remag,metabat2",
             "--qc-tools",
             "busco",
-            "--decision-qc",
+            "--qc-decision",
             "busco",
             "--busco-db",
             str(self.busco_db),
-            "--overlap-threshold",
+            "--min-overlap",
             "0.51",
             mock_bin_mode="half",
         )
@@ -523,42 +505,15 @@ class MockEndToEndTests(unittest.TestCase):
             "contig_id\tdepth\nc1\t30\nc2\t20\nc3\t10\n",
             encoding="utf-8",
         )
-        validated = self.run_cli(
-            "validate",
-            "--sample",
-            "sample1",
-            "--contigs",
-            str(self.fasta),
-            "--depth",
-            f"alpha={alpha}",
-            "--depth",
-            f"beta={beta}",
-            "--binners",
-            "metabat2",
-            "--qc-tools",
-            "busco",
-            "--decision-qc",
-            "busco",
-            "--busco-db",
-            str(self.busco_db),
-            "--min-contig-bp",
-            "1",
-        )
-        self.assertEqual(validated.returncode, 0, validated.stderr)
-        validation_report = json.loads(validated.stdout)
-        self.assertEqual(validation_report["depth_source_count"], 2)
-        self.assertEqual(validation_report["coverage_columns"], ["alpha", "beta"])
-        self.assertEqual(validation_report["coverage_column_count"], 2)
-
         output = self.root / "multi-coverage-all-binners"
         completed = self.run_cli(
             "--sample",
             "sample1",
             "--contigs",
             str(self.fasta),
-            "--depth",
+            "--coverage",
             f"alpha={alpha}",
-            "--depth",
+            "--coverage",
             f"beta={beta}",
             "--output",
             str(output),
@@ -566,15 +521,15 @@ class MockEndToEndTests(unittest.TestCase):
             "remag,concoct,metabat2,vamb",
             "--qc-tools",
             "eukcc",
-            "--decision-qc",
+            "--qc-decision",
             "eukcc",
             "--eukcc-db",
             str(self.eukcc_db),
-            "--retain-min-bin-bp",
+            "--min-retain-length",
             "1",
-            "--qc-min-bin-bp",
+            "--min-selection-length",
             "1",
-            "--min-contig-bp",
+            "--min-input-length",
             "1",
             "--threads",
             "1",
@@ -669,7 +624,7 @@ class MockEndToEndTests(unittest.TestCase):
         self.assertEqual(vamb_metadata["coverage_columns"], ["alpha", "beta"])
         self.assertEqual(vamb_metadata["coverage_column_count"], 2)
 
-    def test_single_depth_concoct_keeps_legacy_normalization_policy(self) -> None:
+    def test_single_depth_concoct_keeps_native_defaults(self) -> None:
         output = self.root / "single-depth-concoct"
         completed = self.run_cli(
             *self.base_run(output),
@@ -677,7 +632,7 @@ class MockEndToEndTests(unittest.TestCase):
             "concoct",
             "--qc-tools",
             "eukcc",
-            "--decision-qc",
+            "--qc-decision",
             "eukcc",
             "--eukcc-db",
             str(self.eukcc_db),
@@ -703,7 +658,7 @@ class MockEndToEndTests(unittest.TestCase):
             "sample1",
             "--contigs",
             str(self.fasta),
-            "--depth",
+            "--coverage",
             str(matrix),
             "--output",
             str(output),
@@ -711,15 +666,15 @@ class MockEndToEndTests(unittest.TestCase):
             "remag,concoct,metabat2,vamb",
             "--qc-tools",
             "eukcc",
-            "--decision-qc",
+            "--qc-decision",
             "eukcc",
             "--eukcc-db",
             str(self.eukcc_db),
-            "--retain-min-bin-bp",
+            "--min-retain-length",
             "1",
-            "--qc-min-bin-bp",
+            "--min-selection-length",
             "1",
-            "--min-contig-bp",
+            "--min-input-length",
             "1",
             "--threads",
             "1",
@@ -761,7 +716,7 @@ class MockEndToEndTests(unittest.TestCase):
     def test_zero_qc_candidates_is_a_successful_empty_result(self) -> None:
         output = self.root / "zero-candidates"
         arguments = self.base_run(output)
-        qc_index = arguments.index("--qc-min-bin-bp") + 1
+        qc_index = arguments.index("--min-selection-length") + 1
         arguments[qc_index] = "1000000"
         completed = self.run_cli(
             *arguments,
@@ -769,7 +724,7 @@ class MockEndToEndTests(unittest.TestCase):
             "metabat2",
             "--qc-tools",
             "all",
-            "--decision-qc",
+            "--qc-decision",
             "eukcc",
             "--eukcc-db",
             str(self.eukcc_db),
@@ -798,7 +753,7 @@ class MockEndToEndTests(unittest.TestCase):
             "empty1",
             "--contigs",
             str(empty_fasta),
-            "--depth",
+            "--coverage",
             str(unrelated_depth),
             "--output",
             str(output),
@@ -806,7 +761,7 @@ class MockEndToEndTests(unittest.TestCase):
             "all",
             "--qc-tools",
             "all",
-            "--decision-qc",
+            "--qc-decision",
             "eukcc",
             "--eukcc-db",
             str(self.eukcc_db),
@@ -846,32 +801,10 @@ class MockEndToEndTests(unittest.TestCase):
         self.assertTrue((output / "selection" / "representatives.tsv").is_file())
         self.assertTrue((output / "mags" / "manifest.tsv").is_file())
 
-        validated = self.run_cli(
-            "validate",
-            "--sample",
-            "empty1",
-            "--contigs",
-            str(empty_fasta),
-            "--depth",
-            str(unrelated_depth),
-            "--binners",
-            "all",
-            "--qc-tools",
-            "all",
-            "--decision-qc",
-            "eukcc",
-            "--eukcc-db",
-            str(self.eukcc_db),
-            "--busco-db",
-            str(self.busco_db),
-        )
-        self.assertEqual(validated.returncode, 0, validated.stderr)
-        self.assertEqual(json.loads(validated.stdout)["contigs"], 0)
-
     def test_contigs_below_minimum_are_a_tool_free_empty_result(self) -> None:
         output = self.root / "below-minimum-input"
         arguments = self.base_run(output)
-        minimum_index = arguments.index("--min-contig-bp") + 1
+        minimum_index = arguments.index("--min-input-length") + 1
         arguments[minimum_index] = "101"
         completed = self.run_cli(
             *arguments,
@@ -879,7 +812,7 @@ class MockEndToEndTests(unittest.TestCase):
             "all",
             "--qc-tools",
             "all",
-            "--decision-qc",
+            "--qc-decision",
             "eukcc",
             "--eukcc-db",
             str(self.eukcc_db),
@@ -927,10 +860,10 @@ class MockEndToEndTests(unittest.TestCase):
         self.assertTrue((output / "mags" / "manifest.tsv").is_file())
 
     def test_direct_cli_help_and_removed_options(self) -> None:
-        help_result = self.run_cli("-h")
+        help_result = self.run_cli("--help")
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
-        self.assertIn("--min-contig-bp", help_result.stdout)
-        self.assertIn("--max-contamination", help_result.stdout)
+        self.assertIn("--min-input-length", help_result.stdout)
+        self.assertIn("--max-selection-contamination", help_result.stdout)
         self.assertNotIn("--kunpeng-db", help_result.stdout)
         self.assertIn("--random-seed INT", help_result.stdout)
         self.assertIn("usage: eukbinminer", help_result.stdout)
@@ -945,7 +878,7 @@ class MockEndToEndTests(unittest.TestCase):
             "--kraken-db",
             "--kraken-memory-mapping",
         ):
-            self.assertNotIn(removed, help_result.stdout)
+            self.assertNotIn(removed, help_result.stdout.split())
 
         old_run = self.run_cli("run")
         self.assertNotEqual(old_run.returncode, 0)
@@ -961,7 +894,7 @@ class MockEndToEndTests(unittest.TestCase):
             "remag,metabat2,vamb",
             "--qc-tools",
             "eukcc",
-            "--decision-qc",
+            "--qc-decision",
             "eukcc",
             "--eukcc-db",
             str(self.eukcc_db),
@@ -1009,7 +942,7 @@ class MockEndToEndTests(unittest.TestCase):
             "remag,metabat2,vamb",
             "--qc-tools",
             "eukcc",
-            "--decision-qc",
+            "--qc-decision",
             "eukcc",
             "--eukcc-db",
             str(self.eukcc_db),
@@ -1023,18 +956,18 @@ class MockEndToEndTests(unittest.TestCase):
         )
 
         invalid = self.run_cli(
-            "validate",
+            "--output", str(self.root / "invalid-seed"),
             "--sample",
             "sample1",
             "--contigs",
             str(self.fasta),
-            "--depth",
+            "--coverage",
             str(self.depth),
             "--binners",
             "metabat2",
             "--qc-tools",
             "eukcc",
-            "--decision-qc",
+            "--qc-decision",
             "eukcc",
             "--eukcc-db",
             str(self.eukcc_db),
@@ -1052,13 +985,13 @@ class MockEndToEndTests(unittest.TestCase):
             "metabat2",
             "--qc-tools",
             "busco",
-            "--decision-qc",
+            "--qc-decision",
             "busco",
             "--busco-db",
             str(self.busco_db),
-            "--min-completeness",
+            "--min-selection-completeness",
             "98",
-            "--max-contamination",
+            "--max-selection-contamination",
             "1",
         )
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
@@ -1074,13 +1007,13 @@ class MockEndToEndTests(unittest.TestCase):
             "metabat2",
             "--qc-tools",
             "busco",
-            "--decision-qc",
+            "--qc-decision",
             "busco",
             "--busco-db",
             str(self.busco_db),
-            "--min-completeness",
+            "--min-selection-completeness",
             "98.1",
-            "--max-contamination",
+            "--max-selection-contamination",
             "1",
         )
         self.assertEqual(rejected.returncode, 0, rejected.stderr)
@@ -1096,13 +1029,13 @@ class MockEndToEndTests(unittest.TestCase):
             "metabat2",
             "--qc-tools",
             "eukcc",
-            "--decision-qc",
+            "--qc-decision",
             "eukcc",
             "--eukcc-db",
             str(self.eukcc_db),
-            "--min-completeness",
+            "--min-selection-completeness",
             "91",
-            "--max-contamination",
+            "--max-selection-contamination",
             "1",
         )
         self.assertEqual(eukcc.returncode, 0, eukcc.stderr)

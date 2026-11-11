@@ -24,12 +24,24 @@ from pathlib import Path
 from typing import IO, Iterable, Optional, Sequence
 
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 TOOL_NAME = "EukBinMiner"
 CLI_NAME = "eukbinminer"
 BINNERS = ("remag", "concoct", "metabat2", "vamb")
 QC_TOOLS = ("eukcc", "busco")
+MANAGED_BINNER_OPTIONS = {
+    "remag": ("-f", "--fasta", "-c", "--coverage", "-o", "--output", "-t", "--threads",
+              "--min-contig-length", "--random-seed", "--filter-only", "--force"),
+    "concoct": ("--composition_file", "--coverage_file", "-b", "--basename",
+                "-t", "--threads", "-l", "--length_threshold", "-s", "--seed"),
+    "metabat2": ("-i", "--inFile", "-a", "--abdFile", "-o", "--outFile",
+                 "-m", "--minContig", "-t", "--numThreads", "--seed", "--cvExt"),
+    "vamb": ("--outdir", "--fasta", "--composition", "--bamfiles", "--bamdir",
+             "--abundance_tsv", "--abundance", "-m", "-p", "--seed", "--cuda", "--minfasta"),
+}
 DEFAULT_RANDOM_SEED = 6311
+# Backend manifests use a fixed group; users organize runs through --output.
+INTERNAL_STUDY = "standalone"
 INSTALL_ROOT = Path(__file__).resolve().parents[1]
 _script_candidates = (
     INSTALL_ROOT / "scripts",
@@ -186,8 +198,31 @@ def parse_depth_inputs(values: Sequence[str | Path]) -> tuple[DepthInput, ...]:
             )
         inputs.append(DepthInput(Path(path_text).expanduser().resolve(), label))
     if not inputs:
-        raise UserError("at least one --depth input is required")
+        raise UserError("at least one --coverage input is required")
     return tuple(inputs)
+
+
+def resolve_coverage_inputs(args: argparse.Namespace) -> None:
+    """Route one homogeneous set of coverage files to its native backend."""
+    inputs = parse_depth_inputs(args.coverage)
+    kinds = []
+    for item in inputs:
+        path = item.path
+        if not path.is_file() or path.stat().st_size == 0:
+            raise UserError(f"coverage file does not exist or is empty: {path}")
+        with path.open("rb") as handle:
+            prefix = handle.read(4)
+        if prefix[:2] == b"\x1f\x8b":
+            with gzip.open(path, "rb") as handle:
+                prefix = handle.read(4)
+        is_bam = prefix == b"BAM\x01" or path.suffix.lower() == ".bam"
+        if is_bam and item.label is not None:
+            raise UserError("NAME= aliases apply only to coverage tables, not BAM files")
+        kinds.append("bam" if is_bam else "table")
+    if len(set(kinds)) != 1:
+        raise UserError("--coverage cannot mix BAM files and coverage tables in one run")
+    args.bam = [item.path for item in inputs] if kinds[0] == "bam" else None
+    args.depth = args.coverage if kinds[0] == "table" else None
 
 
 def _depth_file_label(path: Path) -> str:
@@ -554,10 +589,14 @@ def directory_state(path: Optional[Path], required: Sequence[str]) -> dict[str, 
 def require_remag_cuda() -> dict[str, object]:
     """Probe the same Conda environment used by the native ReMAG backend."""
     environment = environment_value("REMAG_ENV")
-    command = ["python"]
     if environment:
         command = [environment_value("CONDA_EXE") or "conda", "run", "--no-capture-output",
                    "-p" if environment.startswith("/") else "-n", environment, "python"]
+    else:
+        from run_seeded_vamb import console_interpreter
+
+        interpreter = console_interpreter(Path(executable("remag", "ReMAG")))
+        command = [str(interpreter or sys.executable)]
     probe = (
         "import json, sys, torch; from remag.utils import get_torch_device; "
         "device = get_torch_device(); "
@@ -573,92 +612,55 @@ def require_remag_cuda() -> dict[str, object]:
                                 check=False, timeout=60)
         if result.returncode:
             detail = (result.stderr.strip() or result.stdout.strip())[-800:]
-            raise UserError("--remag-gpu requires CUDA-enabled PyTorch and a visible allocated "
+            raise UserError("--gpu T requires CUDA-enabled PyTorch and a visible allocated "
                             f"NVIDIA GPU in the ReMAG environment. Probe failed: {detail}")
         info = json.loads(result.stdout)
         if info.get("device") != "cuda":
-            raise UserError("--remag-gpu: ReMAG did not select CUDA")
+            raise UserError("--gpu T: ReMAG did not select CUDA")
         return info
     except (OSError, subprocess.TimeoutExpired, ValueError) as error:
-        raise UserError(f"--remag-gpu CUDA check failed: {error}") from error
+        raise UserError(f"--gpu T CUDA check failed: {error}") from error
 
 
-def doctor_report(args: argparse.Namespace) -> dict[str, object]:
-    binners = parse_choices(args.binners, BINNERS, "binners")
-    qc_tools = parse_choices(args.qc_tools, QC_TOOLS, "QC tools")
-    if args.remag_gpu and "remag" not in binners:
-        raise UserError("--remag-gpu requires remag in --binners")
+def require_vamb_cuda() -> dict[str, object]:
+    """Check CUDA using the interpreter that will run VAMB."""
+    from run_seeded_vamb import console_interpreter
 
-    checks: list[dict[str, object]] = []
-
-    def add_executable(label: str, name: str) -> None:
-        resolved = shutil.which(name)
-        checks.append(
-            {
-                "kind": "executable",
-                "name": label,
-                "requested": name,
-                "resolved": resolved,
-                "ok": resolved is not None,
-            }
-        )
-
-    checks.append(
-        {
-            "kind": "executable",
-            "name": "Python",
-            "requested": sys.executable,
-            "resolved": str(Path(sys.executable).resolve()),
-            "ok": Path(sys.executable).is_file(),
-        }
+    vamb = Path(executable("vamb", "VAMB"))
+    interpreter = console_interpreter(vamb) or Path(sys.executable)
+    probe = (
+        "import json, sys, torch; "
+        "available = torch.cuda.is_available(); "
+        "print(json.dumps(dict(device='cuda' if available else 'cpu', "
+        "torch_version=torch.__version__, cuda_version=torch.version.cuda, "
+        "gpu_name=torch.cuda.get_device_name(0) if available else None))); "
+        "sys.exit(0 if available else 2)"
     )
-    add_executable("bash", "bash")
-    add_executable("seqkit", "seqkit")
-    for tool in (*binners, *qc_tools):
-        add_executable(tool, tool)
-
-    if args.remag_gpu:
-        try:
-            device = require_remag_cuda()
-            checks.append({"kind": "device", "name": "ReMAG CUDA", "ok": True, **device})
-        except UserError as error:
-            checks.append({"kind": "device", "name": "ReMAG CUDA", "ok": False, "error": str(error)})
-
-    databases: dict[str, dict[str, object]] = {}
-    if "eukcc" in qc_tools:
-        value = args.eukcc_db or environment_value("EUKCC_DB")
-        databases["eukcc"] = directory_state(
-            Path(value) if value else None,
-            (),
-        )
-    if "busco" in qc_tools:
-        value = args.busco_db or environment_value("BUSCO_DB")
-        databases["busco"] = directory_state(
-            Path(value) if value else None,
-            ("dataset.cfg", "hmms"),
-        )
-    ok = all(bool(check["ok"]) for check in checks) and all(
-        bool(database["ok"]) for database in databases.values()
-    )
-    return {
-        "schema_version": 1,
-        "tool": TOOL_NAME,
-        "version": VERSION,
-        "ok": ok,
-        "binners": list(binners),
-        "qc_tools": list(qc_tools),
-        "execution_mode": "current_environment_path",
-        "checks": checks,
-        "databases": databases,
-    }
+    try:
+        result = subprocess.run([str(interpreter), "-c", probe], text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                check=False, timeout=60)
+        if result.returncode:
+            detail = (result.stderr.strip() or result.stdout.strip())[-800:]
+            raise UserError(f"--gpu T requires CUDA in the VAMB environment: {detail}")
+        info = json.loads(result.stdout)
+        if info.get("device") != "cuda":
+            raise UserError("--gpu T: VAMB CUDA is unavailable")
+        return info
+    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+        raise UserError(f"--gpu T VAMB CUDA check failed: {error}") from error
 
 
 def write_env(path: Path, values: dict[str, object]) -> None:
-    lines = [
-        f"{key}={shlex.quote(str(value))}\n"
-        for key, value in sorted(values.items())
-        if value is not None
-    ]
+    lines = []
+    for key, value in sorted(values.items()):
+        if value is None:
+            continue
+        encoded = (
+            "(" + shlex.join(value) + ")" if isinstance(value, list)
+            else shlex.quote(str(value))
+        )
+        lines.append(f"{key}={encoded}\n")
     atomic_text(path, "".join(lines))
 
 
@@ -936,7 +938,7 @@ def decision_table(
     busco_merged: Path,
     output: Path,
 ) -> None:
-    if args.decision_qc == "eukcc":
+    if args.qc_decision == "eukcc":
         columns, rows = read_tsv(eukcc_merged)
         output_columns = [
             *columns,
@@ -949,8 +951,8 @@ def decision_table(
             passed, score = qc_metrics(
                 row.get("completeness", ""),
                 row.get("contamination", ""),
-                min_completeness=args.min_completeness,
-                max_contamination=args.max_contamination,
+                min_completeness=args.min_selection_completeness,
+                max_contamination=args.max_selection_contamination,
                 contamination_penalty=args.contamination_penalty,
             )
             if row.get("eukcc_status") != "ok":
@@ -980,8 +982,8 @@ def decision_table(
             passed, score = qc_metrics(
                 completeness,
                 contamination,
-                min_completeness=args.min_completeness,
-                max_contamination=args.max_contamination,
+                min_completeness=args.min_selection_completeness,
+                max_contamination=args.max_selection_contamination,
                 contamination_penalty=args.contamination_penalty,
             )
             if row.get("busco_status") != "ok":
@@ -1050,61 +1052,92 @@ def materialize_representatives(
     return destination / "manifest.tsv"
 
 
+def binner_parameters(args: argparse.Namespace) -> dict[str, list[str]]:
+    parsed = {}
+    for binner in BINNERS:
+        label = f"--{binner}-parameters"
+        try:
+            tokens = shlex.split(getattr(args, f"{binner}_parameters"))
+        except ValueError as error:
+            raise UserError(f"{label}: {error}") from error
+        if tokens and binner not in args.binner_list:
+            raise UserError(f"{label} requires {binner} in --binners")
+        protected = (*MANAGED_BINNER_OPTIONS[binner], "-h", "--help", "--version")
+        if binner == "concoct":
+            protected += ("-v",)
+        for token in tokens:
+            if "\x00" in token or token == "--":
+                raise UserError(f"{label}: invalid parameter {token!r}")
+            if token.startswith("-") and not token.startswith("--") and len(token) > 2 and token[1:3].isalpha():
+                raise UserError(f"{label}: write short options and their values separately: {token!r}")
+            option = token.split("=", 1)[0]
+            if any(
+                (flag.startswith(option) if option.startswith("--")
+                 else token.startswith(flag) if len(flag) == 2 else False)
+                for flag in protected
+            ):
+                raise UserError(
+                    f"{label}: {option} is managed by EBM; use its public parameters instead"
+                )
+        parsed[binner] = tokens
+    return parsed
+
+
 def validate_args(args: argparse.Namespace) -> None:
-    selectors = (args.contig_column, args.coverage_columns, args.variance_columns)
+    resolve_coverage_inputs(args)
+    selectors = (args.cov_contig_column, args.cov_mean_column, args.cov_variance_column)
     if args.bam and any(selectors):
-        raise UserError("custom column options apply only to --depth")
-    if any(selectors) and not (args.contig_column and args.coverage_columns):
-        raise UserError("custom tables require --contig-column and --coverage-columns together")
+        raise UserError("--cov-* column options apply only to coverage tables, not BAM files")
+    if any(selectors) and not (args.cov_contig_column and args.cov_mean_column):
+        raise UserError("custom tables require --cov-contig-column and --cov-mean-column together")
     args.binner_list = parse_choices(args.binners, BINNERS, "binners")
-    if args.remag_gpu and "remag" not in args.binner_list:
-        raise UserError("--remag-gpu requires remag in --binners")
+    args.binner_parameters = binner_parameters(args)
+    if args.gpu == "T" and not {"remag", "vamb"}.intersection(args.binner_list):
+        raise UserError("--gpu T requires remag or vamb in --binners")
     args.qc_list = parse_choices(args.qc_tools, QC_TOOLS, "QC tools")
-    if args.decision_qc not in args.qc_list:
-        raise UserError("--decision-qc must also occur in --qc-tools")
-    if args.retain_min_bin_bp < 1:
-        raise UserError("--retain-min-bin-bp must be positive")
-    if args.qc_min_bin_bp < args.retain_min_bin_bp:
+    if args.qc_decision not in args.qc_list:
+        raise UserError("--qc-decision must also occur in --qc-tools")
+    if args.min_retain_length < 0:
+        raise UserError("--min-retain-length must be non-negative")
+    if args.min_selection_length < 0:
+        raise UserError("--min-selection-length must be non-negative")
+    if args.min_selection_length < args.min_retain_length:
         raise UserError(
-            "--qc-min-bin-bp must be >= --retain-min-bin-bp"
+            "--min-selection-length must be >= --min-retain-length"
         )
-    if not 0.0 < args.overlap_threshold <= 1.0:
-        raise UserError("--overlap-threshold must be in (0, 1]")
+    if not 0.0 < args.min_overlap <= 1.0:
+        raise UserError("--min-overlap must be in (0, 1]")
     if (
         not math.isfinite(args.contamination_penalty)
         or args.contamination_penalty < 0
     ):
         raise UserError("--contamination-penalty must be non-negative")
     if (
-        not math.isfinite(args.min_completeness)
-        or not 0.0 <= args.min_completeness <= 100.0
+        not math.isfinite(args.min_selection_completeness)
+        or not 0.0 <= args.min_selection_completeness <= 100.0
     ):
-        raise UserError("--min-completeness must be in [0, 100]")
+        raise UserError("--min-selection-completeness must be in [0, 100]")
     if (
-        not math.isfinite(args.max_contamination)
-        or not 0.0 <= args.max_contamination <= 100.0
+        not math.isfinite(args.max_selection_contamination)
+        or not 0.0 <= args.max_selection_contamination <= 100.0
     ):
-        raise UserError("--max-contamination must be in [0, 100]")
+        raise UserError("--max-selection-contamination must be in [0, 100]")
     if args.threads < 1:
         raise UserError("--threads must be positive")
     if not 1 <= args.random_seed <= 4294967295:
         raise UserError("--random-seed must be positive and at most 4294967295")
-    if args.min_contig_bp < 1:
-        raise UserError("--min-contig-bp must be positive")
+    if args.min_input_length < 1:
+        raise UserError("--min-input-length must be positive")
     if args.sample in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9._-]+", args.sample):
         raise UserError(
             "--sample must contain only letters, digits, dot, underscore, hyphen"
         )
-    if args.study in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9._-]+", args.study):
-        raise UserError(
-            "--study must contain only letters, digits, dot, underscore, hyphen"
-        )
 
 
 def depth_column_options(args):
-    return dict(contig_column=args.contig_column,
-                coverage_columns=[x.strip() for x in args.coverage_columns.split(",")] if args.coverage_columns else None,
-                variance_columns=[x.strip() for x in args.variance_columns.split(",")] if args.variance_columns else None)
+    return dict(contig_column=args.cov_contig_column,
+                coverage_columns=[x.strip() for x in args.cov_mean_column.split(",")] if args.cov_mean_column else None,
+                variance_columns=[x.strip() for x in args.cov_variance_column.split(",")] if args.cov_variance_column else None)
 
 
 def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
@@ -1114,7 +1147,7 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
     eligible_lengths = OrderedDict(
         (identifier, length)
         for identifier, length in lengths.items()
-        if length >= args.min_contig_bp
+        if length >= args.min_input_length
     )
     bam_summary = {}
     if args.bam:
@@ -1173,7 +1206,7 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
     }
     return {
         "sample": args.sample,
-        "study": args.study,
+        "study": INTERNAL_STUDY,
         "contigs": len(lengths),
         "bp": sum(lengths.values()),
         "eligible_contigs": len(eligible_lengths),
@@ -1195,23 +1228,24 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
             "total_avg_depth_policy"
         ],
         "binners": list(args.binner_list),
-        "remag_gpu": args.remag_gpu,
+        "binner_parameters": args.binner_parameters,
+        "gpu": args.gpu,
         "qc_tools": list(args.qc_list),
-        "decision_qc": args.decision_qc,
+        "decision_qc": args.qc_decision,
         "random_seed": args.random_seed,
         "contamination_source": (
             "eukcc_contamination"
-            if args.decision_qc == "eukcc"
+            if args.qc_decision == "eukcc"
             else "busco_duplicated"
         ),
-        "min_completeness": args.min_completeness,
-        "max_contamination": args.max_contamination,
+        "min_completeness": args.min_selection_completeness,
+        "max_contamination": args.max_selection_contamination,
         "contamination_penalty": args.contamination_penalty,
         "qc_references": qc_references,
-        "retain_min_bin_bp": args.retain_min_bin_bp,
-        "qc_min_bin_bp": args.qc_min_bin_bp,
-        "min_contig_bp": args.min_contig_bp,
-        "overlap_threshold": args.overlap_threshold,
+        "retain_min_bin_bp": args.min_retain_length,
+        "qc_min_bin_bp": args.min_selection_length,
+        "min_contig_bp": args.min_input_length,
+        "overlap_threshold": args.min_overlap,
     }
 
 
@@ -1235,7 +1269,7 @@ def complete_empty_input_workflow(
     )
 
     results_root = out / "results"
-    sample_results = results_root / args.study / args.sample
+    sample_results = results_root / INTERNAL_STUDY / args.sample
     sample_results.mkdir(parents=True, exist_ok=True)
     write_tsv(
         sample_results / "branch_status.tsv",
@@ -1263,11 +1297,11 @@ def complete_empty_input_workflow(
     stats_payload = {
         "schema_version": 1,
         "rank": 1,
-        "study": args.study,
+        "study": INTERNAL_STUDY,
         "sample": args.sample,
-        "minimum_bp_inclusive": args.qc_min_bin_bp,
+        "minimum_bp_inclusive": args.min_selection_length,
         "binners": list(args.binner_list),
-        "remag_gpu": args.remag_gpu,
+        "gpu": args.gpu,
         "branch_state": {
             binner: "not_run_empty_input" for binner in args.binner_list
         },
@@ -1309,10 +1343,10 @@ def complete_empty_input_workflow(
         decision,
         stats_done,
         selection,
-        args.overlap_threshold,
+        args.min_overlap,
         args.contamination_penalty,
-        args.min_completeness,
-        args.max_contamination,
+        args.min_selection_completeness,
+        args.max_selection_contamination,
     )
     mags_manifest = materialize_representatives(selection, out / "mags")
     empty_input_reason = (
@@ -1325,11 +1359,11 @@ def complete_empty_input_workflow(
         "tool": TOOL_NAME,
         "version": VERSION,
         "sample": args.sample,
-        "study": args.study,
+        "study": INTERNAL_STUDY,
         "requested_binners": list(args.binner_list),
         "completed_binners": [],
         "qc_tools": list(args.qc_list),
-        "decision_qc": args.decision_qc,
+        "decision_qc": args.qc_decision,
         "random_seed": args.random_seed,
         "qc_references": input_summary["qc_references"],
         "discovered_bins": 0,
@@ -1369,7 +1403,11 @@ def complete_empty_input_workflow(
 
 def run_workflow(args: argparse.Namespace) -> None:
     validate_args(args)
-    args.remag_cuda = require_remag_cuda() if args.remag_gpu else None
+    args.cuda_devices = {}
+    if args.gpu == "T":
+        for binner, probe in (("remag", require_remag_cuda), ("vamb", require_vamb_cuda)):
+            if binner in args.binner_list:
+                args.cuda_devices[binner] = probe()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     with (out / ".run.lock").open("a") as lock:
@@ -1424,7 +1462,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         runtime["depth_path"] = str(depth_inputs[0].path)
         runtime["depth_sha256"] = sha256_file(depth_inputs[0].path)
     runtime["threads"] = args.threads
-    runtime["remag_cuda"] = args.remag_cuda
+    runtime["cuda_devices"] = args.cuda_devices
     runtime["backend_environments"] = {
         name: environment_value(name)
         for name in ("CONDA_EXE", "REMAG_ENV", "CONCOCT_ENV", "METABAT2_ENV",
@@ -1473,6 +1511,8 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
     for directory in set(runtime_directories.values()):
         directory.mkdir(parents=True, exist_ok=True)
     workflow_environment = dict(os.environ)
+    if args.gpu == "F":
+        workflow_environment["CUDA_VISIBLE_DEVICES"] = ""
     workflow_environment.update(
         {
             name: str(directory.resolve())
@@ -1480,7 +1520,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         }
     )
     results_root = out / "results"
-    preflight = results_root / args.study / args.sample / "preflight"
+    preflight = results_root / INTERNAL_STUDY / args.sample / "preflight"
     normalized_depth = work / "input" / "depth.jgi.tsv"
     normalized_depth.parent.mkdir(parents=True, exist_ok=True)
     if args.bam:
@@ -1502,7 +1542,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         atomic_text(normalized_depth, depth_text)
 
     manifest = out / "manifest.tsv"
-    make_manifest(manifest, args.study, args.sample, normalized_depth)
+    make_manifest(manifest, INTERNAL_STUDY, args.sample, normalized_depth)
     if int(input_summary["eligible_contigs"]) == 0:
         complete_empty_input_workflow(
             args,
@@ -1520,12 +1560,12 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         depth_tsv=normalized_depth,
         sample=args.sample,
         out_dir=preflight,
-        minimum_length_inclusive=args.min_contig_bp,
+        minimum_length_inclusive=args.min_input_length,
     )
 
     # Accept only statuses produced by this invocation after branch validation.
     for status in (
-        results_root / args.study / args.sample / "branch_status.tsv",
+        results_root / INTERNAL_STUDY / args.sample / "branch_status.tsv",
         out / "status/binner/r000001.status.tsv",
     ):
         status.unlink(missing_ok=True)
@@ -1536,7 +1576,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
     )
     backend_env = config_dir / "backend.env"
     env_values: dict[str, object] = {
-        "STUDY": args.study,
+        "STUDY": INTERNAL_STUDY,
         "SAMPLE": args.sample,
         "CONTIG_FASTA": args.contigs.resolve(),
         "DEPTH_TSV": normalized_depth,
@@ -1550,11 +1590,14 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         "CONCOCT_ENV": environment_value("CONCOCT_ENV") or "",
         "METABAT2_ENV": environment_value("METABAT2_ENV") or "",
         "THREADS": args.threads,
+        "USE_GPU": args.gpu,
         "RANDOM_SEED": args.random_seed,
-        "MIN_BIN_SIZE": args.retain_min_bin_bp,
-        "INPUT_MIN_CONTIG_BP": args.min_contig_bp,
+        "MIN_BIN_SIZE": max(1, args.min_retain_length),
+        "INPUT_MIN_CONTIG_BP": args.min_input_length,
         "INPUT_SETS": "union",
         "BINNERS": " ".join(classic),
+        "BINNER_PARAMETERS_JSON": json.dumps(args.binner_parameters, sort_keys=True),
+        **{f"{name.upper()}_PARAMETERS": tokens for name, tokens in args.binner_parameters.items()},
         "CROSS_ACCOUNT_COORDINATOR_USER": getpass.getuser(),
         "RUN_ROOT": out,
         "MANIFEST": manifest,
@@ -1569,7 +1612,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         )
         completed_classic = successful_binners(
             results_root,
-            args.study,
+            INTERNAL_STUDY,
             args.sample,
             classic,
         )
@@ -1584,7 +1627,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
             prepare_vamb_input(
                 preflight,
                 out / "inputs" / "r000001",
-                args.study,
+                INTERNAL_STUDY,
                 args.sample,
             )
             vamb = executable("vamb", "VAMB")
@@ -1612,8 +1655,8 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
                     "VAMB_EXE": vamb,
                     "VAMB_TOOL_IDENTITY": vamb_identity,
                     "VAMB_ENV_HISTORY": history,
-                    "VAMB_MIN_CONTIG_INCLUSIVE": args.min_contig_bp,
-                    "VAMB_MIN_FASTA_BP": args.retain_min_bin_bp,
+                    "VAMB_MIN_CONTIG_INCLUSIVE": args.min_input_length,
+                    "VAMB_MIN_FASTA_BP": max(1, args.min_retain_length),
                 }
             )
             write_env(backend_env, env_values)
@@ -1650,7 +1693,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
             )
             completed_vamb = successful_binners(
                 results_root,
-                args.study,
+                INTERNAL_STUDY,
                 args.sample,
                 ("vamb",),
             )
@@ -1664,7 +1707,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
 
     completed_binners = successful_binners(
         results_root,
-        args.study,
+        INTERNAL_STUDY,
         args.sample,
         args.binner_list,
     )
@@ -1694,7 +1737,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         binners=completed_binners,
         seqkit=seqkit_exe,
         threads=args.threads,
-        minimum_bp=args.qc_min_bin_bp,
+        minimum_bp=args.min_selection_length,
         stats_output=stats,
         done_output=stats_done,
         candidate_output=candidates,
@@ -1786,10 +1829,10 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         decision,
         stats_done,
         selection,
-        args.overlap_threshold,
+        args.min_overlap,
         args.contamination_penalty,
-        args.min_completeness,
-        args.max_contamination,
+        args.min_selection_completeness,
+        args.max_selection_contamination,
     )
     mags_manifest = materialize_representatives(selection, out / "mags")
 
@@ -1798,11 +1841,11 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         "tool": TOOL_NAME,
         "version": VERSION,
         "sample": args.sample,
-        "study": args.study,
+        "study": INTERNAL_STUDY,
         "requested_binners": list(args.binner_list),
         "completed_binners": list(completed_binners),
         "qc_tools": list(args.qc_list),
-        "decision_qc": args.decision_qc,
+        "decision_qc": args.qc_decision,
         "random_seed": args.random_seed,
         "qc_references": input_summary["qc_references"],
         "discovered_bins": json.loads(stats_done.read_text(encoding="utf-8"))[
@@ -1849,12 +1892,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
     )
 
 
-def add_workflow_arguments(
-    parser: argparse.ArgumentParser,
-    *,
-    include_decision: bool,
-    include_runtime: bool,
-) -> None:
+def add_workflow_arguments(parser: argparse.ArgumentParser) -> None:
     workflow = parser.add_argument_group("workflow selection")
     workflow.add_argument(
         "--binners",
@@ -1866,25 +1904,29 @@ def add_workflow_arguments(
         ),
     )
     workflow.add_argument(
-        "--remag-gpu", action="store_true",
-        help="require native ReMAG CUDA; fail if unavailable (default: native automatic device selection)",
+        "--gpu", choices=("T", "F"), default="F",
+        help="T: require CUDA for selected ReMAG/VAMB; F: run all tools on CPU (default: F)",
     )
+    for binner in BINNERS:
+        workflow.add_argument(
+            f"--{binner}-parameters", default="", metavar="TEXT",
+            help=f"quoted native {binner} options; EBM-managed options cannot be overridden (default: none)",
+        )
     workflow.add_argument(
         "--qc-tools",
-        default="all",
+        default="eukcc",
         metavar="LIST",
-        help="eukcc, busco, eukcc,busco, or all (default: all)",
+        help="eukcc, busco, eukcc,busco, or all (default: eukcc)",
     )
-    if include_decision:
-        workflow.add_argument(
-            "--decision-qc",
-            choices=QC_TOOLS,
-            default="eukcc",
-            help=(
-                "QC tool controlling final eligibility and ordering; it must "
-                "also occur in --qc-tools (default: eukcc)"
-            ),
-        )
+    workflow.add_argument(
+        "--qc-decision",
+        choices=QC_TOOLS,
+        default="eukcc",
+        help=(
+            "QC tool controlling final eligibility and ordering; it must "
+            "also occur in --qc-tools (default: eukcc)"
+        ),
+    )
 
     references = parser.add_argument_group("reference databases")
     references.add_argument(
@@ -1902,11 +1944,7 @@ def add_workflow_arguments(
     )
 
 
-def add_common_arguments(
-    parser: argparse.ArgumentParser,
-    *,
-    include_output: bool,
-) -> None:
+def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     required = parser.add_argument_group("required arguments")
     required.add_argument(
         "--sample",
@@ -1920,77 +1958,71 @@ def add_common_arguments(
         metavar="FASTA",
         help="input contig FASTA with unique record IDs",
     )
-    coverage = required.add_mutually_exclusive_group(required=True)
-    coverage.add_argument(
-        "--depth",
-        action="append",
-        metavar="[NAME=]TSV",
+    required.add_argument(
+        "--coverage",
+        required=True,
+        action="extend",
+        nargs="+",
+        metavar="FILE",
         help=(
-            "JGI depth table or generic contig/coverage TSV; repeat for "
-            "independent mapped-sample coverage files, optionally naming a "
-            "single-coverage file as NAME=TSV"
+            "coverage table(s) or coordinate-sorted indexed BAM(s); "
+            "accepts multiple files and repeated --coverage; do not mix formats. "
+            "Single-coverage tables may be named NAME=TSV"
         ),
     )
-    coverage.add_argument("--bam", action="append", type=Path, metavar="BAM",
-                          help="coordinate-sorted indexed BAM; repeat once per mapped sample (no --depth needed)")
     columns = parser.add_argument_group("custom coverage table columns")
-    columns.add_argument("--contig-column", metavar="NAME")
-    columns.add_argument("--coverage-columns", metavar="A,B", help="comma-separated mean columns in sample order")
-    columns.add_argument("--variance-columns", metavar="A_VAR,B_VAR", help="optional observed variance columns in the same sample order")
-    if include_output:
-        required.add_argument(
-            "--output",
-            required=True,
-            type=Path,
-            metavar="DIR",
-            help="output directory",
-        )
-
-    add_workflow_arguments(
-        parser,
-        include_decision=True,
-        include_runtime=True,
+    columns.add_argument("--cov-contig-column", metavar="NAME")
+    columns.add_argument("--cov-mean-column", metavar="A,B", help="comma-separated mean columns in sample order")
+    columns.add_argument("--cov-variance-column", metavar="A_VAR,B_VAR", help="optional observed variance columns in the same sample order")
+    required.add_argument(
+        "--output",
+        required=True,
+        type=Path,
+        metavar="DIR",
+        help="output directory",
     )
+
+    add_workflow_arguments(parser)
 
     filtering = parser.add_argument_group("input filtering")
     filtering.add_argument(
-        "--min-contig-bp",
+        "--min-input-length",
         type=int,
         default=1500,
         metavar="INT",
         help="minimum contig length entering binning, inclusive (default: 1500)",
     )
     filtering.add_argument(
-        "--retain-min-bin-bp",
+        "--min-retain-length",
         type=int,
-        default=1,
+        default=0,
         metavar="INT",
-        help="minimum raw-bin length to retain (default: 1)",
+        help="additional raw-bin retention minimum in bp; 0 disables this filter; native binner minima still apply (default: 0)",
     )
     filtering.add_argument(
-        "--qc-min-bin-bp",
+        "--min-selection-length",
         type=int,
         default=500_000,
         metavar="INT",
-        help="minimum retained-bin length entering QC (default: 500000)",
+        help="minimum retained-bin length in bp entering QC and representative selection (default: 500000)",
     )
 
     quality = parser.add_argument_group("quality filtering")
     quality.add_argument(
-        "--min-completeness",
+        "--min-selection-completeness",
         type=float,
-        default=50.0,
+        default=0.0,
         metavar="FLOAT",
-        help="minimum final completeness percentage, inclusive (default: 50)",
+        help="minimum completeness percentage for selection, inclusive; valid QC required (default: 0)",
     )
     quality.add_argument(
-        "--max-contamination",
+        "--max-selection-contamination",
         type=float,
-        default=10.0,
+        default=100.0,
         metavar="FLOAT",
         help=(
             "maximum final contamination percentage, inclusive; BUSCO uses "
-            "duplicated percentage as the contamination proxy (default: 10)"
+            "duplicated percentage as the contamination proxy (default: 100)"
         ),
     )
     quality.add_argument(
@@ -2006,7 +2038,7 @@ def add_common_arguments(
 
     deduplication = parser.add_argument_group("deduplication")
     deduplication.add_argument(
-        "--overlap-threshold",
+        "--min-overlap",
         type=float,
         default=0.50,
         metavar="FLOAT",
@@ -2034,79 +2066,28 @@ def add_common_arguments(
             f"(default: {DEFAULT_RANDOM_SEED})"
         ),
     )
-    execution.add_argument(
-        "--study",
-        default="standalone",
-        metavar="NAME",
-        help="study name written to results and metadata (default: standalone)",
-    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=CLI_NAME,
+        allow_abbrev=False,
+        add_help=False,
         description=(
             "Mine quality-controlled, non-redundant eukaryotic bins from "
             "contigs with coverage tables or indexed BAM files."
         ),
-        epilog=(
-            "Auxiliary commands:\n"
-            f"  {CLI_NAME} doctor    check tools and reference databases\n"
-            f"  {CLI_NAME} validate  validate inputs and print the run plan"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--help", action="help", help="show this help message and exit")
     parser.add_argument("--version", action="version", version=VERSION)
-    add_common_arguments(parser, include_output=True)
-    parser.set_defaults(command="run")
-    return parser
-
-
-def build_doctor_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog=f"{CLI_NAME} doctor",
-        description=(
-            "Check selected executables on PATH and validate reference "
-            "database layout."
-        ),
-    )
-    add_workflow_arguments(
-        parser,
-        include_decision=False,
-        include_runtime=False,
-    )
-    parser.set_defaults(command="doctor")
-    return parser
-
-
-def build_validate_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog=f"{CLI_NAME} validate",
-        description="Validate inputs and print the run plan; BAM validation uses samtools but does not calculate coverage.",
-    )
-    add_common_arguments(parser, include_output=False)
-    parser.set_defaults(command="validate")
+    add_run_arguments(parser)
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    raw_argv = list(sys.argv[1:] if argv is None else argv)
-    if raw_argv and raw_argv[0] == "doctor":
-        args = build_doctor_parser().parse_args(raw_argv[1:])
-    elif raw_argv and raw_argv[0] == "validate":
-        args = build_validate_parser().parse_args(raw_argv[1:])
-    else:
-        args = build_parser().parse_args(raw_argv)
+    args = build_parser().parse_args(argv)
     try:
-        if args.command == "doctor":
-            report = doctor_report(args)
-            print(json.dumps(report, indent=2, sort_keys=True))
-            return 0 if report["ok"] else 1
-        validate_args(args)
-        if args.command == "validate":
-            print(json.dumps(validate_inputs(args), indent=2, sort_keys=True))
-        elif args.command == "run":
-            run_workflow(args)
+        run_workflow(args)
     except (UserError, OSError, ValueError) as error:
         print(f"{CLI_NAME}: error: {error}", file=sys.stderr)
         return 2

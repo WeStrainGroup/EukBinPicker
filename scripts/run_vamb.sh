@@ -9,6 +9,7 @@ GLOBAL_CONFIG="${1:?Usage: run_vamb.sh GLOBAL_CONFIG}"
     exit 2
 }
 # shellcheck source=/dev/null
+VAMB_PARAMETERS=()
 source "$GLOBAL_CONFIG"
 
 : "${MANIFEST:?Missing MANIFEST}"
@@ -23,6 +24,14 @@ source "$GLOBAL_CONFIG"
 : "${VAMB_ENV_HISTORY:?Missing VAMB_ENV_HISTORY}"
 : "${VAMB_MIN_CONTIG_INCLUSIVE:=1500}"
 : "${VAMB_MIN_FASTA_BP:=1}"
+: "${USE_GPU:=F}"
+[[ "$USE_GPU" == "T" || "$USE_GPU" == "F" ]] || {
+    printf '[ERROR] USE_GPU must be T or F\n' >&2
+    exit 2
+}
+if [[ "$USE_GPU" == "F" ]]; then
+    export CUDA_VISIBLE_DEVICES=""
+fi
 : "${RANDOM_SEED:=6311}"
 : "${THREADS:=${SLURM_CPUS_PER_TASK:-8}}"
 : "${SLURM_ARRAY_TASK_ID:?Missing SLURM_ARRAY_TASK_ID}"
@@ -122,10 +131,12 @@ write_fingerprint() {
         --field "threads=${THREADS}"
         --field "minimum_contig_inclusive=${VAMB_MIN_CONTIG_INCLUSIVE}"
         --field "minimum_fasta_bp=${VAMB_MIN_FASTA_BP}"
+        --field "gpu=${USE_GPU}"
+        --field "native_parameters=${BINNER_PARAMETERS_JSON:-}"
         --field "random_seed=${RANDOM_SEED}"
         --field "rng_seed_policy=python_numpy_torch_before_vamb_import"
-        --field "binsplitting=disabled"
-        --field "default_training_epochs=true"
+        --field "binsplitting=native_default_unless_overridden"
+        --field "training_parameters=native_defaults_plus_user_parameters"
         --file "input_fasta=${input_fasta}"
         --file "abundance=${abundance}"
         --file "input_metadata=${input_metadata}"
@@ -269,8 +280,14 @@ run_branch() {
             -p "$THREADS"
             --seed "$RANDOM_SEED"
             --minfasta "$VAMB_MIN_FASTA_BP"
-            -o
         )
+        if [[ "$USE_GPU" == "T" ]]; then
+            command+=(--cuda)
+        fi
+        if ((${#VAMB_PARAMETERS[@]})); then
+            command+=("${VAMB_PARAMETERS[@]}")
+        fi
+        { printf '%q ' "${command[@]}"; printf '\n'; } > "${stage}/branch/command.txt"
         if ! "${command[@]}"; then
             failed_log="${status_dir}/${rank_name}.${binner}.failed.log"
             if [[ -f "${tool_out}/log.txt" ]]; then

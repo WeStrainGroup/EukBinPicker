@@ -17,6 +17,9 @@ note() {
 
 [[ -s "$CONFIG_PATH" ]] || die "Config does not exist or is empty: $CONFIG_PATH"
 # shellcheck source=/dev/null
+REMAG_PARAMETERS=()
+CONCOCT_PARAMETERS=()
+METABAT2_PARAMETERS=()
 source "$CONFIG_PATH"
 
 : "${STUDY:?Missing STUDY in config}"
@@ -29,12 +32,12 @@ source "$CONFIG_PATH"
 : "${METABAT2_ENV:=}"
 : "${THREADS:=${SLURM_CPUS_PER_TASK:-16}}"
 : "${MIN_BIN_SIZE:=1}"
+: "${USE_GPU:=F}"
 : "${INPUT_MIN_CONTIG_BP:=1500}"
 : "${CONCOCT_CHUNK_SIZE:=10000}"
 : "${REMAG_MIN_CONTIG:=${INPUT_MIN_CONTIG_BP}}"
 : "${CONCOCT_MIN_CONTIG:=${INPUT_MIN_CONTIG_BP}}"
 : "${METABAT2_MIN_CONTIG:=${INPUT_MIN_CONTIG_BP}}"
-: "${CONCOCT_MAX_CLUSTERS:=400}"
 : "${RANDOM_SEED:=6311}"
 : "${INPUT_SETS:=union}"
 : "${BINNERS:=remag concoct metabat2}"
@@ -50,11 +53,15 @@ require_positive_integer() {
 
 for integer_setting in \
     THREADS MIN_BIN_SIZE CONCOCT_CHUNK_SIZE REMAG_MIN_CONTIG \
-    CONCOCT_MIN_CONTIG METABAT2_MIN_CONTIG CONCOCT_MAX_CLUSTERS \
+    CONCOCT_MIN_CONTIG METABAT2_MIN_CONTIG \
     RANDOM_SEED; do
     require_positive_integer "$integer_setting"
 done
 require_positive_integer INPUT_MIN_CONTIG_BP
+[[ "$USE_GPU" == "T" || "$USE_GPU" == "F" ]] || die "USE_GPU must be T or F"
+if [[ "$USE_GPU" == "F" ]]; then
+    export CUDA_VISIBLE_DEVICES=""
+fi
 [[ "$REMAG_KEEP_INTERMEDIATE" == "0" || "$REMAG_KEEP_INTERMEDIATE" == "1" ]] ||
     die "REMAG_KEEP_INTERMEDIATE must be 0 or 1"
 
@@ -304,6 +311,7 @@ write_branch_fingerprint() {
         --field "min_bin_size=${MIN_BIN_SIZE}"
         --field "input_min_contig_bp=${INPUT_MIN_CONTIG_BP}"
         --field "tool_identity=${tool_identity}"
+        --field "native_parameters=${BINNER_PARAMETERS_JSON:-}"
         --file "input_fasta=${INPUT_FASTA}"
         --file "preflight_manifest=${PREP_DIR}/preflight.json"
         --file "runner=${SCRIPT_DIR}/run_binning_pilot.sh"
@@ -333,14 +341,16 @@ write_branch_fingerprint() {
             env_spec="${PROJECT_DIR}/envs/remag.yml"
             fingerprint_args+=(
                 --field "environment=${env_name}"
-                --field "mode=short-reads"
+                --field "gpu=${USE_GPU}"
+                --field "mode=metagenomics_default"
                 --field "skip_bacterial_filter=true"
                 --field "min_contig=${REMAG_MIN_CONTIG}"
                 --field "random_seed=${RANDOM_SEED}"
-                --field "keep_intermediate=${REMAG_KEEP_INTERMEDIATE}"
+                --field "base_keep_intermediate=${REMAG_KEEP_INTERMEDIATE}"
                 --field "coverage_columns=${coverage_column_count}"
                 --field "coverage_adapter=one_headerless_tsv_per_column"
                 --file "coverage_splitter=${SCRIPT_DIR}/split_remag_coverage.py"
+                --file "device_launcher=${SCRIPT_DIR}/run_remag.py"
             )
             ;;
         concoct)
@@ -356,16 +366,11 @@ write_branch_fingerprint() {
                 --field "chunk_size=${CONCOCT_CHUNK_SIZE}"
                 --field "min_contig_inclusive=${CONCOCT_MIN_CONTIG}"
                 --field "length_threshold=$((CONCOCT_MIN_CONTIG - 1))"
-                --field "max_clusters=${CONCOCT_MAX_CLUSTERS}"
+                --field "clusters=native_default_unless_overridden"
                 --field "random_seed=${RANDOM_SEED}"
                 --field "coverage_columns=${coverage_column_count}"
-                --field "coverage_normalization=$(
-                    if ((coverage_column_count == 1)); then
-                        printf 'disabled_single_dimension'
-                    else
-                        printf 'concoct_default_multi_dimension'
-                    fi
-                )"
+                --field "coverage_normalization=native_default_unless_overridden"
+                --field "total_coverage=native_default_unless_overridden"
                 --file "bin_selector=${SCRIPT_DIR}/select_bins_by_size.py"
             )
             ;;
@@ -468,16 +473,21 @@ run_remag() {
         "$INPUT_FASTA" \
         "${coverage_args[@]}" \
         -o "$stage_dir" \
-        -m short-reads \
         --skip-bacterial-filter \
         --min-contig-length "$REMAG_MIN_CONTIG" \
-        --min-bin-size "$MIN_BIN_SIZE" \
         --random-seed "$RANDOM_SEED" \
         -t "$THREADS")
     if [[ "$REMAG_KEEP_INTERMEDIATE" == "1" ]]; then
         command+=(-k)
     fi
-    run_in_env "$REMAG_ENV" "${command[@]}"
+    if ((${#REMAG_PARAMETERS[@]})); then
+        command+=("${REMAG_PARAMETERS[@]}")
+    fi
+    { printf '%q ' "${command[@]}"; printf '\n'; } > "${stage_dir}/command.txt"
+    local remag_python=python
+    [[ -n "$REMAG_ENV" ]] || remag_python="$PYTHON_EXE"
+    run_in_env "$REMAG_ENV" "$remag_python" "${SCRIPT_DIR}/run_remag.py" \
+        --gpu "$USE_GPU" -- "${command[@]}"
     run_in_env "$REMAG_ENV" remag --version > "${stage_dir}/tool_version.txt"
 }
 
@@ -492,10 +502,13 @@ run_metabat2() {
         -a "${stage_dir}/depth.tsv"
         -o "${stage_dir}/bins/${SAMPLE}.metabat2"
         -m "$METABAT2_MIN_CONTIG"
-        -s "$MIN_BIN_SIZE"
         --seed "$RANDOM_SEED"
         -t "$THREADS")
     [[ "$depth_mode" != "means" ]] || command+=(--cvExt)
+    if ((${#METABAT2_PARAMETERS[@]})); then
+        command+=("${METABAT2_PARAMETERS[@]}")
+    fi
+    { printf '%q ' "${command[@]}"; printf '\n'; } > "${stage_dir}/command.txt"
     run_in_env "$METABAT2_ENV" "${command[@]}"
     if ! run_in_env "$METABAT2_ENV" metabat2 --help \
         > "${stage_dir}/tool_version.txt" 2>&1; then
@@ -606,10 +619,7 @@ run_concoct() {
     cluster_count=0
     branch_state="skipped_insufficient_eligible_fragments"
     if ((eligible_fragment_count >= 2)); then
-        cluster_count=$((eligible_fragment_count / 2))
-        ((cluster_count < 2)) && cluster_count=2
-        ((cluster_count > CONCOCT_MAX_CLUSTERS)) &&
-            cluster_count="$CONCOCT_MAX_CLUSTERS"
+        cluster_count=400  # CONCOCT 1.1 native default; never adapt to input size.
         branch_state="run"
     fi
     {
@@ -619,7 +629,7 @@ run_concoct() {
         printf 'eligible_fragment_count\t%s\n' "$eligible_fragment_count"
         printf 'min_contig_inclusive\t%s\n' "$CONCOCT_MIN_CONTIG"
         printf 'effective_length_threshold\t%s\n' "$length_threshold"
-        printf 'cluster_count\t%s\n' "$cluster_count"
+        printf 'default_cluster_count\t%s\n' "$cluster_count"
     } > "${stage_dir}/concoct_settings.tsv"
     if ((eligible_fragment_count < 2)); then
         "$PYTHON_EXE" "${SCRIPT_DIR}/select_bins_by_size.py" \
@@ -639,17 +649,15 @@ run_concoct() {
     concoct_command=(concoct \
         --composition_file "${stage_dir}/contigs_10K.fa" \
         --coverage_file "${stage_dir}/fragment_coverage.tsv")
-    if ((coverage_column_count == 1)); then
-        # Preserve the single-column policy. Native defaults also retain a
-        # total-coverage feature; this policy is not a proven improvement.
-        concoct_command+=(--no_cov_normalization --no_total_coverage)
-    fi
     concoct_command+=( \
-        --clusters "$cluster_count" \
         --length_threshold "$length_threshold" \
         --threads "$THREADS" \
         --seed "$RANDOM_SEED" \
         -b "${stage_dir}/concoct/")
+    if ((${#CONCOCT_PARAMETERS[@]})); then
+        concoct_command+=("${CONCOCT_PARAMETERS[@]}")
+    fi
+    { printf '%q ' "${concoct_command[@]}"; printf '\n'; } > "${stage_dir}/command.txt"
     run_in_env "$CONCOCT_ENV" "${concoct_command[@]}"
 
     clustering_file="${stage_dir}/concoct/clustering_gt${length_threshold}.csv"
@@ -718,6 +726,12 @@ run_branch() {
             metabat2) run_metabat2 "$stage_dir" ;;
             *) return 64 ;;
         esac
+        if [[ "$binner" != concoct ]] && ((MIN_BIN_SIZE > 1)); then
+            mv "${stage_dir}/bins" "${stage_dir}/raw_bins"
+            "$PYTHON_EXE" "${SCRIPT_DIR}/select_bins_by_size.py" \
+                --input-dir "${stage_dir}/raw_bins" --output-dir "${stage_dir}/bins" \
+                --manifest "${stage_dir}/bin_selection.tsv" --min-bp "$MIN_BIN_SIZE"
+        fi
         (
             cd "$stage_dir"
             "$PYTHON_EXE" "${SCRIPT_DIR}/audit_branch.py" \

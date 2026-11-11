@@ -23,7 +23,7 @@ class ReviewRegressionTests(unittest.TestCase):
 
     def arguments(self, output):
         return [*self.base_run(output), "--binners", "metabat2",
-                "--qc-tools", "eukcc", "--decision-qc", "eukcc",
+                "--qc-tools", "eukcc", "--qc-decision", "eukcc",
                 "--eukcc-db", str(self.eukcc_db)]
 
     def test_remag_gpu_probes_the_backend_environment(self):
@@ -36,45 +36,36 @@ class ReviewRegressionTests(unittest.TestCase):
                     self.assertEqual(cli.require_remag_cuda(), info)
                     self.assertEqual(run.call_args.args[0][:6],
                                      ["/mock/conda", "run", "--no-capture-output", selector, environment, "python"])
-        with patch.dict(os.environ, {}, clear=True):
+        with patch.dict(os.environ, {}, clear=True), patch.object(cli.shutil, "which", return_value=str(self.tools / "remag")):
             with patch.object(cli.subprocess, "run", return_value=subprocess.CompletedProcess(
                     [], 0, json.dumps(info), "")) as run:
                 cli.require_remag_cuda()
-                self.assertEqual(run.call_args.args[0][:2], ["python", "-c"])
+                self.assertEqual(run.call_args.args[0][:2], [cli.sys.executable, "-c"])
 
     def test_remag_gpu_rejects_cpu_and_probe_errors(self):
         for result in (subprocess.CompletedProcess([], 2, '{"device":"cpu"}', ""),
                        subprocess.CompletedProcess([], 0, '{"device":"cpu"}', ""),
                        subprocess.CompletedProcess([], 1, "", "No module named torch")):
-            with patch.object(cli.subprocess, "run", return_value=result):
+            with patch.object(cli.subprocess, "run", return_value=result), patch.object(cli.shutil, "which", return_value=str(self.tools / "remag")):
                 with self.assertRaises(cli.UserError):
                     cli.require_remag_cuda()
-        with patch.object(cli.subprocess, "run", side_effect=subprocess.TimeoutExpired("probe", 60)):
+        with patch.object(cli.subprocess, "run", side_effect=subprocess.TimeoutExpired("probe", 60)), patch.object(cli.shutil, "which", return_value=str(self.tools / "remag")):
             with self.assertRaises(cli.UserError):
                 cli.require_remag_cuda()
 
     def test_remag_gpu_fails_before_output_creation(self):
         output = self.root / "gpu-unavailable"
-        args = cli.build_parser().parse_args([*self.base_run(output), "--remag-gpu"])
+        args = cli.build_parser().parse_args([*self.base_run(output), "--gpu", "T"])
         with patch.object(cli, "require_remag_cuda", side_effect=cli.UserError("CUDA unavailable")):
             with self.assertRaisesRegex(cli.UserError, "CUDA unavailable"):
                 cli.run_workflow(args)
         self.assertFalse(output.exists())
 
-    def test_remag_gpu_requires_remag_and_doctor_reports_device(self):
-        output = self.root / "gpu-wrong-binner"
-        args = cli.build_parser().parse_args([*self.arguments(output), "--remag-gpu"])
-        with self.assertRaisesRegex(cli.UserError, "requires remag"):
+    def test_gpu_requires_a_supported_binner(self):
+        args = cli.build_parser().parse_args([
+            *self.arguments(self.root / "gpu-wrong-binner"), "--gpu", "T"])
+        with self.assertRaisesRegex(cli.UserError, "requires remag or vamb"):
             cli.validate_args(args)
-        args = cli.build_doctor_parser().parse_args(["--binners", "remag", "--remag-gpu",
-                "--qc-tools", "eukcc", "--eukcc-db", str(self.eukcc_db)])
-        with patch.object(cli.shutil, "which", return_value="/mock/tool"):
-            with patch.object(cli, "require_remag_cuda", return_value={"device": "cuda"}):
-                report = cli.doctor_report(args)
-                self.assertTrue(report["ok"])
-                self.assertTrue(next(r for r in report["checks"] if r["name"] == "ReMAG CUDA")["ok"])
-            with patch.object(cli, "require_remag_cuda", side_effect=cli.UserError("CUDA unavailable")):
-                self.assertFalse(cli.doctor_report(args)["ok"])
 
     def test_default_and_all_run_four_binners_without_taxonomy(self):
         expected = ["remag", "concoct", "metabat2", "vamb"]
@@ -82,17 +73,13 @@ class ReviewRegressionTests(unittest.TestCase):
         for extra in ([], ["--binners", "all"]):
             output = self.root / ("explicit-all" if extra else "default-four")
             result = self.run_cli(*self.base_run(output), *extra,
-                "--qc-tools", "eukcc", "--decision-qc", "eukcc",
+                "--qc-tools", "eukcc", "--qc-decision", "eukcc",
                 "--eukcc-db", str(self.eukcc_db), concoct_success=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             summary = json.loads((output / "summary.json").read_text())
             self.assertEqual(summary["requested_binners"], expected)
             self.assertEqual(summary["completed_binners"], expected)
             self.assertFalse((output / "taxonomy").exists())
-        result = self.run_cli("doctor", "--qc-tools", "eukcc",
-                              "--eukcc-db", str(self.eukcc_db))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("kunpeng", json.loads(result.stdout)["databases"])
 
     def test_removed_taxonomy_options_are_rejected(self):
         for extra in (["--binners", "taxvamb"], ["--taxonomy", "unused.tsv"],
@@ -111,7 +98,7 @@ class ReviewRegressionTests(unittest.TestCase):
         result = self.run_cli(*args)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("already complete", result.stderr)
-        result = self.run_cli(*args, "--overlap-threshold", "0.75")
+        result = self.run_cli(*args, "--min-overlap", "0.75")
         self.assertEqual(result.returncode, 2)
         self.assertIn("differ", result.stderr)
         original = self.depth.read_text()

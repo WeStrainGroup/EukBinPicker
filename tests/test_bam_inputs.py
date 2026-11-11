@@ -81,13 +81,14 @@ class BamInputTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"unique"):
             bam_inputs.validate_bams([a,a],{},io.StringIO(""))
 
-    def test_mutually_exclusive_inputs_and_selectors(self):
+    def test_mixed_coverage_inputs_and_bam_selectors_are_rejected(self):
         output=self.root/"out";base=self.base_run(output)
-        with self.assertRaises(SystemExit), patch("sys.stderr",io.StringIO()):
-            cli.build_parser().parse_args([*base,"--bam",str(self.bam())])
-        i=base.index("--depth");base[i:i+2]=["--bam",str(self.bam())]
-        args=cli.build_parser().parse_args([*base,"--contig-column","ID","--coverage-columns","mean"])
-        with self.assertRaisesRegex(ValueError,"only to --depth"):cli.validate_args(args)
+        args=cli.build_parser().parse_args([*base,"--coverage",str(self.bam())])
+        with self.assertRaisesRegex(ValueError,"cannot mix BAM"):
+            cli.validate_args(args)
+        i=base.index("--coverage");base[i:i+2]=["--coverage",str(self.bam())]
+        args=cli.build_parser().parse_args([*base,"--cov-contig-column","ID","--cov-mean-column","mean"])
+        with self.assertRaisesRegex(ValueError,"only to coverage tables"):cli.validate_args(args)
 
     def test_samtools_index_fallback_is_not_validation_success(self):
         result=subprocess.CompletedProcess([],0,"c1\t100\t0\t0\n",
@@ -121,7 +122,7 @@ elif name=='concoct_coverage_table.py':
         for name in ["samtools","jgi_summarize_bam_contig_depths","concoct_coverage_table.py"]:
             tool=self.tools/name;tool.write_text(script);tool.chmod(0o755)
         output=self.root/"bam_run";args=self.base_run(output)
-        i=args.index("--depth");args[i:i+2]=["--bam",str(bam)]
+        i=args.index("--coverage");args[i:i+2]=["--coverage",str(bam)]
         args += ["--binners","concoct,metabat2","--qc-tools","eukcc","--eukcc-db",str(self.eukcc_db)]
         first=self.run_cli(*args,concoct_success=True,expected_coverage_columns=("sample",))
         self.assertEqual(first.returncode,0,first.stderr)

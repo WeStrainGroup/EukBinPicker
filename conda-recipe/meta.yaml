@@ -1,5 +1,5 @@
 {% set name = "eukbinminer" %}
-{% set version = "0.2.0" %}
+{% set version = "0.3.0" %}
 
 package:
   name: {{ name }}
@@ -41,8 +41,6 @@ test:
   commands:
     - eukbinminer --version
     - eukbinminer --help
-    - eukbinminer doctor --help
-    - eukbinminer validate --help
     - eukmagminer --version
     - test -f "${PREFIX}/share/eukbinminer/scripts/prepare_inputs.py"
     - test -f "${PREFIX}/share/eukbinminer/scripts/depth_schema.py"
