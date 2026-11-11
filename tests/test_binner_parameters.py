@@ -40,13 +40,13 @@ if "--version" not in args and "--help" not in args:
             arguments += [f"--{name}-parameters", shlex.join(tokens)]
         result = self.run_cli(*arguments, concoct_success=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        metadata = json.loads((output / "config/run.json").read_text())
+        metadata = json.loads((output / "0_log/run.json").read_text())
         self.assertEqual(metadata["binner_parameters"], parameters)
-        self.assertEqual(json.loads((output / "summary.json").read_text())["completed_binners"], list(parameters))
+        self.assertEqual(json.loads((output / "0_log/summary.json").read_text())["completed_binners"], list(parameters))
         for name, tokens in parameters.items():
             received = json.loads((trace / f"{name}.json").read_text())
             self.assertEqual(received[-len(tokens):], tokens)
-            commands = list(output.glob(f"results/*/*/results/union/{name}/command.txt"))
+            commands = list(output.glob(f"0_log/work/results/*/*/results/union/{name}/command.txt"))
             self.assertEqual(len(commands), 1)
             self.assertEqual(shlex.split(commands[0].read_text())[-len(tokens):], tokens)
         self.assertFalse(marker.exists())

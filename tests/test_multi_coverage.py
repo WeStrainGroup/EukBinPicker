@@ -10,8 +10,8 @@ from pathlib import Path
 
 
 PROJECT = Path(__file__).resolve().parents[1]
-CLI = PROJECT / "bin" / "eukbinminer"
-LOADER = importlib.machinery.SourceFileLoader("eukbinminer_test", str(CLI))
+CLI = PROJECT / "bin" / "eukbinpicker"
+LOADER = importlib.machinery.SourceFileLoader("eukbinpicker_test", str(CLI))
 SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 assert SPEC is not None
 MODULE = importlib.util.module_from_spec(SPEC)

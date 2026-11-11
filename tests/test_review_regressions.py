@@ -29,8 +29,8 @@ class ReviewRegressionTests(unittest.TestCase):
     def test_remag_gpu_probes_the_backend_environment(self):
         info = {"device": "cuda", "torch_version": "test", "cuda_version": "12.4", "gpu_name": "mock GPU"}
         for environment, selector in (("remag-gpu", "-n"), ("/env/remag-gpu", "-p")):
-            with patch.dict(os.environ, {"EUKBINMINER_REMAG_ENV": environment,
-                                        "EUKBINMINER_CONDA_EXE": "/mock/conda"}, clear=True):
+            with patch.dict(os.environ, {"EUKBINPICKER_REMAG_ENV": environment,
+                                        "EUKBINPICKER_CONDA_EXE": "/mock/conda"}, clear=True):
                 with patch.object(cli.subprocess, "run", return_value=subprocess.CompletedProcess(
                         [], 0, json.dumps(info), "")) as run:
                     self.assertEqual(cli.require_remag_cuda(), info)
@@ -76,7 +76,7 @@ class ReviewRegressionTests(unittest.TestCase):
                 "--qc-tools", "eukcc", "--qc-decision", "eukcc",
                 "--eukcc-db", str(self.eukcc_db), concoct_success=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            summary = json.loads((output / "summary.json").read_text())
+            summary = json.loads((output / "0_log/summary.json").read_text())
             self.assertEqual(summary["requested_binners"], expected)
             self.assertEqual(summary["completed_binners"], expected)
             self.assertFalse((output / "taxonomy").exists())
@@ -105,7 +105,7 @@ class ReviewRegressionTests(unittest.TestCase):
         self.depth.write_text(original.replace("c1\t3", "c1\t9"))
         self.assertEqual(self.run_cli(*args).returncode, 2)
         self.depth.write_text(original)
-        genome = next((output / "bins").glob("*.fa"))
+        genome = next((output / "3_selection/bins").glob("*.fa"))
         genome.write_text(">damaged\nACGT\n")
         result = self.run_cli(*args)
         self.assertEqual(result.returncode, 2)
@@ -164,7 +164,7 @@ class ReviewRegressionTests(unittest.TestCase):
         args[args.index("--binners") + 1] = "vamb"
         result = self.run_cli(*args)
         self.assertEqual(result.returncode, 0, result.stderr)
-        metadata = json.loads((output / "inputs/r000001/input.json").read_text())
+        metadata = json.loads((output / "0_log/work/inputs/r000001/input.json").read_text())
         self.assertEqual(metadata["coverage_columns"], ["alpha"])
         self.assertEqual(metadata["dropped_all_zero_coverage_columns"], ["zero"])
 
@@ -175,7 +175,7 @@ class ReviewRegressionTests(unittest.TestCase):
         args[args.index("--binners") + 1] = "metabat2,vamb"
         result = self.run_cli(*args)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads((output / "summary.json").read_text())["completed_binners"],
+        self.assertEqual(json.loads((output / "0_log/summary.json").read_text())["completed_binners"],
                          ["metabat2"])
 
     def test_installed_layout_runs_a_classic_binner(self):
@@ -184,12 +184,12 @@ class ReviewRegressionTests(unittest.TestCase):
         project = Path(original_cli).parents[1]
         prefix = self.root / "prefix"
         (prefix / "bin").mkdir(parents=True)
-        shutil.copy2(original_cli, prefix / "bin/eukbinminer")
-        share = prefix / "share/eukbinminer"
+        shutil.copy2(original_cli, prefix / "bin/eukbinpicker")
+        share = prefix / "share/eukbinpicker"
         shutil.copytree(project / "scripts", share / "scripts")
         shutil.copytree(project / "envs", share / "envs")
         try:
-            test_mock_end_to_end.CLI = prefix / "bin/eukbinminer"
+            test_mock_end_to_end.CLI = prefix / "bin/eukbinpicker"
             result = self.run_cli(*self.arguments(self.root / "installed"))
             self.assertEqual(result.returncode, 0, result.stderr)
         finally:
@@ -208,9 +208,9 @@ class ReviewRegressionTests(unittest.TestCase):
         args[args.index("--binners") + 1] = "metabat2,vamb"
         result = self.run_cli(*args)
         self.assertEqual(result.returncode, 0, result.stderr)
-        summary = json.loads((output / "summary.json").read_text())
+        summary = json.loads((output / "0_log/summary.json").read_text())
         self.assertEqual(summary["completed_binners"], ["metabat2"])
-        self.assertFalse((output / "results/standalone/sample1/results/union/vamb").exists())
+        self.assertFalse((output / "0_log/work/results/standalone/sample1/results/union/vamb").exists())
 
     def test_empty_metaeuk_remains_unassessed(self):
         tool = self.tools / "eukcc"
@@ -225,7 +225,7 @@ class ReviewRegressionTests(unittest.TestCase):
         output = self.root / "empty-proteins"
         result = self.run_cli(*self.arguments(output))
         self.assertEqual(result.returncode, 0, result.stderr)
-        with (output / "qc/decision_qc.tsv").open() as handle:
+        with (output / "0_log/decision_qc.tsv").open() as handle:
             row = next(csv.DictReader(handle, delimiter="\t"))
         self.assertEqual(row["eukcc_status"], "metaeuk_empty_proteins")
         self.assertEqual(row["qc_pass"], "no")
@@ -353,10 +353,10 @@ class ReviewRegressionTests(unittest.TestCase):
                 result = self.run_cli(*self.arguments(output))
                 if status == "fatal":
                     self.assertEqual(result.returncode, 2)
-                    self.assertFalse((output / ".complete.json").exists())
+                    self.assertFalse((output / "0_log/.complete.json").exists())
                     continue
                 self.assertEqual(result.returncode, 0, result.stderr)
-                with (output / "qc/decision_qc.tsv").open() as handle:
+                with (output / "0_log/decision_qc.tsv").open() as handle:
                     row = next(csv.DictReader(handle, delimiter="\t"))
                 self.assertEqual(row["eukcc_status"], status)
                 self.assertEqual(row["qc_pass"], "no")

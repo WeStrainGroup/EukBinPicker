@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.40"
+VERSION = "0.1"
 SOURCE = Path(__file__).resolve().parents[1]
 
 
@@ -23,10 +23,10 @@ def run(command: list[str]) -> None:
 def install(prefix: Path, conda: str) -> None:
     prefix = prefix.expanduser().resolve()
     conda = str(Path(shutil.which(conda) or conda).resolve())
-    state = prefix.with_name("." + prefix.name + ".ebm-install")
+    state = prefix.with_name("." + prefix.name + ".ebp-install")
     marker = state / "settings.json"
     settings = {"version": VERSION, "runtime": "cu124", "conda": conda}
-    package = prefix / "share/eukbinminer"
+    package = prefix / "share/eukbinpicker"
     installed = package / "installation.json"
     record = marker if marker.is_file() else installed
     if prefix.exists() or state.exists():
@@ -123,13 +123,13 @@ def install(prefix: Path, conda: str) -> None:
     (package / "installation.json").write_text(json.dumps({
         **settings, "environments": environments,
     }, indent=2) + "\n")
-    shutil.copy2(SOURCE / "bin/eukbinminer", prefix / "bin/eukbinminer")
-    (prefix / "bin/eukbinminer").chmod(0o755)
+    shutil.copy2(SOURCE / "bin/eukbinpicker", prefix / "bin/eukbinpicker")
+    (prefix / "bin/eukbinpicker").chmod(0o755)
     # Activation selects the exact interpreter and native executables together.
-    run([conda, "run", "--no-capture-output", "-p", str(prefix), "eukbinminer", "--version"])
+    run([conda, "run", "--no-capture-output", "-p", str(prefix), "eukbinpicker", "--version"])
     shutil.copytree(logs, package / "install", dirs_exist_ok=True)
     shutil.rmtree(state)
-    print(f"\nInstalled EukBinMiner {VERSION}.")
+    print(f"\nInstalled EukBinPicker {VERSION}.")
 
 
 def main() -> int:

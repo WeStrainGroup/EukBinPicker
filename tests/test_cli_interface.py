@@ -46,7 +46,7 @@ class CliInterfaceTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn(message, result.stderr)
                 self.assertNotIn("Traceback", result.stderr)
-                self.assertFalse((output / "logs/binning.classic.log").exists())
+                self.assertFalse((output / "0_log/logs/binning.classic.log").exists())
 
     def mock_cuda(self):
         modules = self.root / "mock_python_modules"
@@ -94,7 +94,7 @@ if "--version" not in args:
                 traces = [json.loads(line) for line in (self.root / "devices.jsonl").read_text().splitlines()][-2:]
                 self.assertEqual({row["tool"] for row in traces}, {"remag", "vamb"})
                 self.assertTrue(all(row["device"] == device and row["visible"] == visible for row in traces), traces)
-                config = json.loads((output / "config/run.json").read_text())
+                config = json.loads((output / "0_log/run.json").read_text())
                 self.assertEqual(config["gpu"], gpu)
                 self.assertEqual(set(config["cuda_devices"]), {"remag", "vamb"} if gpu == "T" else set())
         changed = self.run_cli(*self.base_run(self.root / "gpu-F"), "--binners", "remag,vamb",
@@ -123,10 +123,10 @@ if "--version" not in args:
         result = self.run_cli(*args, "--binners", "metabat2",
                               "--eukcc-db", str(self.eukcc_db))
         self.assertEqual(result.returncode, 0, result.stderr)
-        summary = json.loads((output / "summary.json").read_text())
+        summary = json.loads((output / "0_log/summary.json").read_text())
         self.assertEqual(summary["qc_tools"], ["eukcc"])
         self.assertEqual(summary["representatives"], 1)
-        self.assertFalse((output / "qc/busco").exists())
+        self.assertFalse((output / "2_qc/busco").exists())
 
     def test_multiple_files_and_custom_columns_keep_sample_pairing(self):
         self.depth.write_text("id\tmean\tvar\nc1\t3\t7\nc2\t2\t5\nc3\t1\t0\n")
@@ -139,7 +139,7 @@ if "--version" not in args:
             "--cov-contig-column", "id", "--cov-mean-column", "mean",
             "--cov-variance-column", "var", "--eukcc-db", str(self.eukcc_db))
         self.assertEqual(result.returncode, 0, result.stderr)
-        plan = json.loads((output / "config/run.json").read_text())
+        plan = json.loads((output / "0_log/run.json").read_text())
         self.assertEqual(plan["coverage_input"], "table")
         self.assertEqual(plan["coverage_columns"], ["depth", "second"])
         self.assertEqual(plan["variance_available"], [True, True])

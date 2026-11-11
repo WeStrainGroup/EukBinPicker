@@ -9,8 +9,7 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parents[1]
 PRODUCTION_ROOTS = (PROJECT / "bin", PROJECT / "scripts")
 PYTHON_SOURCES = (
-    PROJECT / "bin" / "eukbinminer",
-    PROJECT / "bin" / "eukmagminer",
+    PROJECT / "bin" / "eukbinpicker",
     *sorted((PROJECT / "scripts").glob("*.py")),
 )
 

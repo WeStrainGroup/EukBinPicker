@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install from this checkout, or fetch the matching release when piped to bash.
 set -euo pipefail
-VERSION=0.40
+VERSION=0.1
 CONDA_BIN="${CONDA_EXE:-$(command -v conda || true)}"
 [[ -n "$CONDA_BIN" ]] || { echo 'Conda is required.' >&2; exit 2; }
 BASE="$("$CONDA_BIN" info --base)"
@@ -10,8 +10,8 @@ STAGE=""
 trap '[[ -z "$STAGE" ]] || rm -rf -- "$STAGE"' EXIT
 if [[ ! -f "$SOURCE/scripts/install.py" ]]; then
     STAGE="$(mktemp -d)"
-    curl -fsSL --retry 3 "https://github.com/WeStrainGroup/EukBinMiner/archive/refs/tags/v${VERSION}.tar.gz" -o "$STAGE/source.tar.gz"
+    curl -fsSL --retry 3 "https://github.com/WeStrainGroup/EukBinPicker/archive/refs/tags/v${VERSION}.tar.gz" -o "$STAGE/source.tar.gz"
     tar -xzf "$STAGE/source.tar.gz" -C "$STAGE"
-    SOURCE="$STAGE/EukBinMiner-${VERSION}"
+    SOURCE="$STAGE/EukBinPicker-${VERSION}"
 fi
 "$BASE/bin/python" "$SOURCE/scripts/install.py" --conda "$CONDA_BIN" "$@"

@@ -39,7 +39,7 @@ def main() -> None:
             mps.is_available = lambda: False
     elif not torch.cuda.is_available():
         parser.error("--gpu T requires an available CUDA device in the ReMAG environment")
-    print(f"[EukBinMiner] ReMAG device: {'cuda' if args.gpu == 'T' else 'cpu'}", flush=True)
+    print(f"[EukBinPicker] ReMAG device: {'cuda' if args.gpu == 'T' else 'cpu'}", flush=True)
     sys.argv = [executable, *command[1:]]
     runpy.run_path(executable, run_name="__main__")
 

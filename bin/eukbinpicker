@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""EukBinMiner: cross-binner mining of eukaryotic bins."""
+"""EukBinPicker: cross-binner mining of eukaryotic bins."""
 
 from __future__ import annotations
 
@@ -24,9 +24,9 @@ from pathlib import Path
 from typing import IO, Iterable, Optional, Sequence
 
 
-VERSION = "0.40"
-TOOL_NAME = "EukBinMiner"
-CLI_NAME = "eukbinminer"
+VERSION = "0.1"
+TOOL_NAME = "EukBinPicker"
+CLI_NAME = "eukbinpicker"
 BINNERS = ("remag", "concoct", "metabat2", "vamb")
 QC_TOOLS = ("eukcc", "busco")
 MANAGED_BINNER_OPTIONS = {
@@ -45,8 +45,7 @@ INTERNAL_STUDY = "standalone"
 INSTALL_ROOT = Path(__file__).resolve().parents[1]
 _script_candidates = (
     INSTALL_ROOT / "scripts",
-    INSTALL_ROOT / "share" / "eukbinminer" / "scripts",
-    INSTALL_ROOT / "share" / "eukmagminer" / "scripts",
+    INSTALL_ROOT / "share" / "eukbinpicker" / "scripts",
 )
 SCRIPTS = next(
     (
@@ -74,12 +73,9 @@ def note(message: str) -> None:
 def environment_value(suffix: str) -> Optional[str]:
     """Prefer explicit overrides, then the installer's private tool paths."""
 
-    primary = f"EUKBINMINER_{suffix}"
+    primary = f"EUKBINPICKER_{suffix}"
     if primary in os.environ:
         return os.environ[primary]
-    legacy = os.environ.get(f"EUKMAGMINER_{suffix}")
-    if legacy is not None:
-        return legacy
     config = ROOT / "installation.json"
     if config.is_file():
         return json.loads(config.read_text()).get("environments", {}).get(suffix)
@@ -1054,7 +1050,7 @@ def binner_parameters(args: argparse.Namespace) -> dict[str, list[str]]:
                 for flag in protected
             ):
                 raise UserError(
-                    f"{label}: {option} is managed by EBM; use its public parameters instead"
+                    f"{label}: {option} is managed by EBP; use its public parameters instead"
                 )
         parsed[binner] = tokens
     return parsed
@@ -1157,7 +1153,7 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
         if not eukcc_state["ok"]:
             raise UserError(
                 "EukCC needs a valid --eukcc-db or "
-                "EUKBINMINER_EUKCC_DB"
+                "EUKBINPICKER_EUKCC_DB"
             )
     if "busco" in args.qc_list:
         busco_state = directory_state(
@@ -1167,7 +1163,7 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
         if not busco_state["ok"]:
             raise UserError(
                 "BUSCO needs an unpacked --busco-db or "
-                "EUKBINMINER_BUSCO_DB containing dataset.cfg and hmms/"
+                "EUKBINPICKER_BUSCO_DB containing dataset.cfg and hmms/"
             )
     qc_references = {
         "eukcc_db": (
@@ -1245,7 +1241,7 @@ def complete_empty_input_workflow(
         write_gzip_tsv,
     )
 
-    results_root = out / "results"
+    results_root = out / "0_log/work/results"
     sample_results = results_root / INTERNAL_STUDY / args.sample
     sample_results.mkdir(parents=True, exist_ok=True)
     write_tsv(
@@ -1263,8 +1259,9 @@ def complete_empty_input_workflow(
         ),
     )
 
-    qc_root = out / "qc"
-    seqkit_root = qc_root / "seqkit"
+    (out / "1_raw").mkdir(exist_ok=True)
+    qc_root = out / "2_qc"
+    seqkit_root = out / "0_log/seqkit"
     seqkit_root.mkdir(parents=True, exist_ok=True)
     candidates = seqkit_root / "candidates.tsv"
     stats = seqkit_root / "bin_stats.tsv.gz"
@@ -1306,16 +1303,16 @@ def complete_empty_input_workflow(
         json.dumps(stats_payload, indent=2, sort_keys=True) + "\n",
     )
 
-    eukcc_merged = qc_root / "eukcc_merged" / "eukcc_merged.tsv"
-    busco_merged = qc_root / "busco_merged.tsv"
+    eukcc_merged = qc_root / "eukcc" / "eukcc_merged.tsv"
+    busco_merged = qc_root / "busco" / "busco_merged.tsv"
     if "eukcc" in args.qc_list:
-        merge_eukcc(candidates, qc_root / "eukcc", qc_root / "eukcc_merged")
+        merge_eukcc(candidates, qc_root / "eukcc", qc_root / "eukcc")
     if "busco" in args.qc_list:
         merge_busco(candidates, qc_root / "busco", busco_merged)
-    decision = qc_root / "decision_qc.tsv"
+    decision = out / "0_log/decision_qc.tsv"
     decision_table(args, eukcc_merged, busco_merged, decision)
 
-    selection = out / "selection"
+    selection = out / "0_log/selection"
     select_representatives(
         decision,
         stats_done,
@@ -1325,7 +1322,9 @@ def complete_empty_input_workflow(
         args.min_selection_completeness,
         args.max_selection_contamination,
     )
-    bins_manifest = materialize_representatives(selection, out / "bins")
+    bins_manifest = materialize_representatives(selection, out / "3_selection/bins")
+    from output_tables import export_tables
+    export_tables(out, candidates, eukcc_merged, busco_merged, args.qc_list)
     empty_input_reason = (
         "no_input_contigs_with_depth"
         if int(input_summary["contigs"]) == 0
@@ -1349,19 +1348,19 @@ def complete_empty_input_workflow(
         "alternatives": 0,
         "empty_input": True,
         "empty_input_reason": empty_input_reason,
-        "representative_bins": str((out / "bins").resolve()),
+        "representative_bins": str((out / "3_selection/bins").resolve()),
         "bins_manifest_sha256": sha256_file(bins_manifest),
     }
     atomic_text(
-        out / "summary.json",
+        out / "0_log/summary.json",
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
     )
     atomic_text(
         complete,
         json.dumps(
             {
-                "run_metadata_sha256": sha256_file(out / "config/run.json"),
-                "summary_sha256": sha256_file(out / "summary.json"),
+                "run_metadata_sha256": sha256_file(out / "0_log/run.json"),
+                "summary_sha256": sha256_file(out / "0_log/summary.json"),
                 "representatives_sha256": sha256_file(
                     selection / "representatives.tsv"
                 ),
@@ -1369,6 +1368,7 @@ def complete_empty_input_workflow(
                     selection / "alternatives.tsv"
                 ),
                 "bins_manifest_sha256": sha256_file(bins_manifest),
+                "public_sha256": public_checksums(out),
             },
             indent=2,
             sort_keys=True,
@@ -1395,21 +1395,29 @@ def run_workflow(args: argparse.Namespace) -> None:
         run_locked_workflow(args)
 
 
+def public_checksums(out: Path) -> dict[str, str]:
+    paths = [out / "2_qc/summary.tsv", out / "3_selection/representatives.tsv"]
+    paths.extend(sorted((out / "1_raw").glob("*/*")))
+    return {str(path.relative_to(out)): sha256_file(path) for path in paths if path.is_file()}
+
+
 def verify_complete_output(out: Path) -> None:
     try:
-        marker = json.loads((out / ".complete.json").read_text())
+        marker = json.loads((out / "0_log/.complete.json").read_text())
         for key, relative in {
-            "summary_sha256": "summary.json",
-            "representatives_sha256": "selection/representatives.tsv",
-            "alternatives_sha256": "selection/alternatives.tsv",
-            "bins_manifest_sha256": "bins/manifest.tsv",
-            "run_metadata_sha256": "config/run.json",
+            "summary_sha256": "0_log/summary.json",
+            "representatives_sha256": "0_log/selection/representatives.tsv",
+            "alternatives_sha256": "0_log/selection/alternatives.tsv",
+            "bins_manifest_sha256": "3_selection/bins/manifest.tsv",
+            "run_metadata_sha256": "0_log/run.json",
         }.items():
             if sha256_file(out / relative) != marker[key]:
                 raise ValueError(f"checksum mismatch for {relative}")
-        _, rows = read_tsv(out / "bins/manifest.tsv")
+        if public_checksums(out) != marker["public_sha256"]:
+            raise ValueError("retained bins or public summaries changed")
+        _, rows = read_tsv(out / "3_selection/bins/manifest.tsv")
         for row in rows:
-            genome = out / "bins" / f"{row['representative_bin_id']}.fa"
+            genome = out / "3_selection/bins" / f"{row['representative_bin_id']}.fa"
             if sha256_file(genome) != row["sha256"]:
                 raise ValueError(f"checksum mismatch for {genome.name}")
     except (OSError, KeyError, ValueError) as error:
@@ -1419,7 +1427,7 @@ def verify_complete_output(out: Path) -> None:
 def run_locked_workflow(args: argparse.Namespace) -> None:
     input_summary = validate_inputs(args)
     out = args.output.resolve()
-    complete = out / ".complete.json"
+    complete = out / "0_log/.complete.json"
     depth_inputs = parse_depth_inputs(args.depth) if args.depth else ()
     runtime = {
         **input_summary,
@@ -1450,7 +1458,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         if path.suffix in {".py", ".sh"}
     }
     runtime["cli_sha256"] = sha256_file(Path(__file__))
-    run_metadata = out / "config/run.json"
+    run_metadata = out / "0_log/run.json"
     if run_metadata.is_file():
         try:
             previous = json.loads(run_metadata.read_text())
@@ -1469,9 +1477,9 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         note(f"already complete: {out}")
         return
 
-    config_dir = out / "config"
-    logs = out / "logs"
-    work = out / "work"
+    config_dir = out / "0_log/config"
+    logs = out / "0_log/logs"
+    work = out / "0_log/work"
     runtime_root = work / "runtime"
     runtime_directories = {
         "TMPDIR": runtime_root / "tmp",
@@ -1495,7 +1503,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
             for name, directory in runtime_directories.items()
         }
     )
-    results_root = out / "results"
+    results_root = out / "0_log/work/results"
     preflight = results_root / INTERNAL_STUDY / args.sample / "preflight"
     normalized_depth = work / "input" / "depth.jgi.tsv"
     normalized_depth.parent.mkdir(parents=True, exist_ok=True)
@@ -1517,7 +1525,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
     else:
         atomic_text(normalized_depth, depth_text)
 
-    manifest = out / "manifest.tsv"
+    manifest = out / "0_log/work/manifest.tsv"
     make_manifest(manifest, INTERNAL_STUDY, args.sample, normalized_depth)
     if int(input_summary["eligible_contigs"]) == 0:
         complete_empty_input_workflow(
@@ -1542,7 +1550,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
     # Accept only statuses produced by this invocation after branch validation.
     for status in (
         results_root / INTERNAL_STUDY / args.sample / "branch_status.tsv",
-        out / "status/binner/r000001.status.tsv",
+        out / "0_log/work/status/binner/r000001.status.tsv",
     ):
         status.unlink(missing_ok=True)
 
@@ -1575,7 +1583,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         "BINNER_PARAMETERS_JSON": json.dumps(args.binner_parameters, sort_keys=True),
         **{f"{name.upper()}_PARAMETERS": tokens for name, tokens in args.binner_parameters.items()},
         "CROSS_ACCOUNT_COORDINATOR_USER": getpass.getuser(),
-        "RUN_ROOT": out,
+        "RUN_ROOT": out / "0_log/work",
         "MANIFEST": manifest,
     }
     write_env(backend_env, env_values)
@@ -1602,7 +1610,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         if "vamb" in args.binner_list:
             prepare_vamb_input(
                 preflight,
-                out / "inputs" / "r000001",
+                out / "0_log/work/inputs" / "r000001",
                 INTERNAL_STUDY,
                 args.sample,
             )
@@ -1624,10 +1632,10 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
             atomic_text(history, vamb_identity + "\n")
             env_values.update(
                 {
-                    "INPUTS_ROOT": out / "inputs",
+                    "INPUTS_ROOT": out / "0_log/work/inputs",
                     "OUT_ROOT": results_root,
-                    "ADDON_ROOT": out / "vamb",
-                    "ADDON_STATUS_ROOT": out / "status",
+                    "ADDON_ROOT": out / "0_log/work/vamb",
+                    "ADDON_STATUS_ROOT": out / "0_log/work/status",
                     "VAMB_EXE": vamb,
                     "VAMB_TOOL_IDENTITY": vamb_identity,
                     "VAMB_ENV_HISTORY": history,
@@ -1646,15 +1654,14 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
                     not socket_runtime.is_dir()
                     or socket_runtime.parent != Path("/dev/shm")
                     or not socket_runtime.name.startswith(
-                        ("eukbin-", "eukmag-")
+                        "eukbin-"
                     )
                     or socket_runtime.stat().st_uid != os.getuid()
                     or len(str(socket_runtime)) >= 80
                 ):
                     raise UserError(
-                        "EUKBINMINER_VAMB_SOCKET_DIR must be a short, owned "
-                        "/dev/shm/eukbin-* directory (legacy eukmag-* names are "
-                        "also accepted)"
+                        "EUKBINPICKER_VAMB_SOCKET_DIR must be a short, owned "
+                        "/dev/shm/eukbin-* directory"
                     )
                 for name in ("TMPDIR", "TMP", "TEMP"):
                     process_env[name] = str(socket_runtime)
@@ -1696,10 +1703,11 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
     from select_within_sample_representatives import select as select_representatives
     from seqkit_bin_stats import build_manifest_index, inventory_sample
 
-    qc_root = out / "qc"
-    seqkit_root = qc_root / "seqkit"
+    (out / "1_raw").mkdir(exist_ok=True)
+    qc_root = out / "2_qc"
+    seqkit_root = out / "0_log/seqkit"
     seqkit_root.mkdir(parents=True, exist_ok=True)
-    manifest_index = out / "manifest.offsets.bin"
+    manifest_index = out / "0_log/work/manifest.offsets.bin"
     build_manifest_index(manifest, manifest_index)
     seqkit_exe = Path(executable("seqkit", "seqkit"))
     stats = seqkit_root / "bin_stats.tsv.gz"
@@ -1719,11 +1727,12 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         candidate_output=candidates,
         temporary_root=runtime_directories["TMPDIR"],
         fail_on_seqkit_error=True,
+        raw_output=out / "1_raw",
     )
     _, candidate_rows = read_tsv(candidates)
 
-    eukcc_merged = qc_root / "eukcc_merged" / "eukcc_merged.tsv"
-    busco_merged = qc_root / "busco_merged.tsv"
+    eukcc_merged = qc_root / "eukcc" / "eukcc_merged.tsv"
+    busco_merged = qc_root / "busco" / "busco_merged.tsv"
     env_values.update(
         {
             "EUKCC_CANDIDATES": candidates,
@@ -1739,7 +1748,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         eukcc_db_value = args.eukcc_db or environment_value("EUKCC_DB")
         if not eukcc_db_value:
             raise UserError(
-                "EukCC needs --eukcc-db or EUKBINMINER_EUKCC_DB"
+                "EukCC needs --eukcc-db or EUKBINPICKER_EUKCC_DB"
             )
         eukcc_db = Path(eukcc_db_value).expanduser().resolve()
         if not eukcc_db.is_dir():
@@ -1749,7 +1758,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         busco_db_value = args.busco_db or environment_value("BUSCO_DB")
         if not busco_db_value:
             raise UserError(
-                "BUSCO needs --busco-db or EUKBINMINER_BUSCO_DB"
+                "BUSCO needs --busco-db or EUKBINPICKER_BUSCO_DB"
             )
         busco_db = Path(busco_db_value).expanduser().resolve()
         if not busco_db.is_dir():
@@ -1794,13 +1803,13 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
                 )
 
     if "eukcc" in args.qc_list:
-        merge_eukcc(candidates, qc_root / "eukcc", qc_root / "eukcc_merged")
+        merge_eukcc(candidates, qc_root / "eukcc", qc_root / "eukcc")
     if "busco" in args.qc_list:
         merge_busco(candidates, qc_root / "busco", busco_merged)
 
-    decision = qc_root / "decision_qc.tsv"
+    decision = out / "0_log/decision_qc.tsv"
     decision_table(args, eukcc_merged, busco_merged, decision)
-    selection = out / "selection"
+    selection = out / "0_log/selection"
     select_representatives(
         decision,
         stats_done,
@@ -1810,7 +1819,9 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         args.min_selection_completeness,
         args.max_selection_contamination,
     )
-    bins_manifest = materialize_representatives(selection, out / "bins")
+    bins_manifest = materialize_representatives(selection, out / "3_selection/bins")
+    from output_tables import export_tables
+    export_tables(out, candidates, eukcc_merged, busco_merged, args.qc_list)
 
     summary = {
         "schema_version": 3,
@@ -1836,19 +1847,19 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
             1 for _ in (selection / "alternatives.tsv").open()
         )
         - 1,
-        "representative_bins": str((out / "bins").resolve()),
+        "representative_bins": str((out / "3_selection/bins").resolve()),
         "bins_manifest_sha256": sha256_file(bins_manifest),
     }
     atomic_text(
-        out / "summary.json",
+        out / "0_log/summary.json",
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
     )
     atomic_text(
         complete,
         json.dumps(
             {
-                "run_metadata_sha256": sha256_file(out / "config/run.json"),
-                "summary_sha256": sha256_file(out / "summary.json"),
+                "run_metadata_sha256": sha256_file(out / "0_log/run.json"),
+                "summary_sha256": sha256_file(out / "0_log/summary.json"),
                 "representatives_sha256": sha256_file(
                     selection / "representatives.tsv"
                 ),
@@ -1856,6 +1867,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
                     selection / "alternatives.tsv"
                 ),
                 "bins_manifest_sha256": sha256_file(bins_manifest),
+                "public_sha256": public_checksums(out),
             },
             indent=2,
             sort_keys=True,
@@ -1886,7 +1898,7 @@ def add_workflow_arguments(parser: argparse.ArgumentParser) -> None:
     for binner in BINNERS:
         workflow.add_argument(
             f"--{binner}-parameters", default="", metavar="TEXT",
-            help=f"quoted native {binner} options; EBM-managed options cannot be overridden (default: none)",
+            help=f"quoted native {binner} options; EBP-managed options cannot be overridden (default: none)",
         )
     workflow.add_argument(
         "--qc-tools",
@@ -1908,14 +1920,14 @@ def add_workflow_arguments(parser: argparse.ArgumentParser) -> None:
     references.add_argument(
         "--eukcc-db",
         metavar="DIR",
-        help="EukCC database; defaults to EUKBINMINER_EUKCC_DB",
+        help="EukCC database; defaults to EUKBINPICKER_EUKCC_DB",
     )
     references.add_argument(
         "--busco-db",
         metavar="DIR",
         help=(
             "unpacked BUSCO lineage directory containing dataset.cfg and "
-            "hmms/; defaults to EUKBINMINER_BUSCO_DB"
+            "hmms/; defaults to EUKBINPICKER_BUSCO_DB"
         ),
     )
 

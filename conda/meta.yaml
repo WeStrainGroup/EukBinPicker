@@ -1,6 +1,6 @@
-{% set version = "0.40" %}
+{% set version = "0.1" %}
 package:
-  name: eukbinminer
+  name: eukbinpicker
   version: {{ version }}
 source:
   path: ..
@@ -14,7 +14,7 @@ requirements:
     - bash
     - conda >=24
 about:
-  home: https://github.com/WeStrainGroup/EukBinMiner
+  home: https://github.com/WeStrainGroup/EukBinPicker
   license: CC-BY-NC-SA-4.0
   license_file: LICENSE
   summary: Recover eukaryotic genome bins with complementary binning methods

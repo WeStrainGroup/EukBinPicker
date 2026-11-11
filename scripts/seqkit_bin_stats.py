@@ -9,6 +9,7 @@ import gzip
 import hashlib
 import json
 import os
+import shutil
 import re
 import struct
 import subprocess
@@ -363,6 +364,7 @@ def inventory_sample(
     temporary_root: Optional[Path] = None,
     require_complete_branches: bool = False,
     fail_on_seqkit_error: bool = False,
+    raw_output: Optional[Path] = None,
 ) -> None:
     sample_row = read_manifest_rank(manifest, manifest_index, rank)
     study = sample_row["study"]
@@ -465,6 +467,19 @@ def inventory_sample(
                     "seqkit_error": "",
                 }
             )
+            if raw_output is not None:
+                target = raw_output / binner / path.name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.exists():
+                    if sha256_file(target) != sha256_file(path):
+                        raise ValueError(f"retained bin changed: {target}")
+                else:
+                    try:
+                        os.link(path, target)
+                    except OSError:
+                        shutil.copy2(path, target)
+                row["bin_path"] = str(target.resolve())
+                row["materialization"] = "retained"
             by_binner[binner]["stats_ok"] += 1
             by_binner[binner]["raw_bp"] += bp
             if meets:

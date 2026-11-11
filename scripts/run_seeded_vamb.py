@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 
-REEXEC_MARKER = "EUKBINMINER_VAMB_SEED_REEXEC"
+REEXEC_MARKER = "EUKBINPICKER_VAMB_SEED_REEXEC"
 
 
 def parse_args(argv: Sequence[str]) -> tuple[int, list[str]]:

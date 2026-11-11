@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 PROJECT = Path(__file__).resolve().parents[1]
-CLI = PROJECT / "bin" / "eukbinminer"
+CLI = PROJECT / "bin" / "eukbinpicker"
 
 MOCK_TOOL = r"""#!/usr/bin/env python3
 import csv
@@ -402,7 +402,7 @@ class MockEndToEndTests(unittest.TestCase):
             "BUSCO_ENV": str(self.root / "envs" / "mock-busco"),
         }
         for suffix, value in configured.items():
-            self.environment[f"EUKBINMINER_{suffix}"] = value
+            self.environment[f"EUKBINPICKER_{suffix}"] = value
         completed = self.run_cli(
             *self.base_run(output),
             "--binners",
@@ -417,7 +417,7 @@ class MockEndToEndTests(unittest.TestCase):
             str(self.busco_db),
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        backend = (output / "config" / "backend.env").read_text(encoding="utf-8")
+        backend = (output / "0_log/config" / "backend.env").read_text(encoding="utf-8")
         for suffix, value in configured.items():
             self.assertIn(f"{suffix}={value}\n", backend)
 
@@ -440,12 +440,12 @@ class MockEndToEndTests(unittest.TestCase):
             mock_bin_mode="half",
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
-        self.assertEqual(summary["tool"], "EukBinMiner")
+        summary = json.loads((output / "0_log/summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(summary["tool"], "EukBinPicker")
         self.assertEqual(summary["completed_binners"], ["remag", "metabat2"])
         self.assertEqual(summary["representatives"], 1)
         self.assertEqual(summary["alternatives"], 1)
-        with (output / "selection" / "representatives.tsv").open(
+        with (output / "0_log/selection" / "representatives.tsv").open(
             encoding="utf-8", newline=""
         ) as handle:
             representative = next(csv.DictReader(handle, delimiter="\t"))
@@ -462,14 +462,14 @@ class MockEndToEndTests(unittest.TestCase):
         self.assertNotIn("eukcc_quality", representative)
         self.assertEqual(representative["selected_binner"], "metabat2")
         normalized_depth = (
-            output / "work" / "input" / "depth.jgi.tsv"
+            output / "0_log/work" / "input" / "depth.jgi.tsv"
         ).read_text(encoding="utf-8").splitlines()[0]
         self.assertEqual(
             normalized_depth,
             "contigName\tcontigLen\ttotalAvgDepth\t"
             "sample1.bam\tsample1.bam-var",
         )
-        mags = sorted((output / "bins").glob("*.fa"))
+        mags = sorted((output / "3_selection/bins").glob("*.fa"))
         self.assertEqual(len(mags), 1)
 
         strict_output = self.root / "busco-threshold-051"
@@ -489,7 +489,7 @@ class MockEndToEndTests(unittest.TestCase):
         )
         self.assertEqual(strict.returncode, 0, strict.stderr)
         strict_summary = json.loads(
-            (strict_output / "summary.json").read_text(encoding="utf-8")
+            (strict_output / "0_log/summary.json").read_text(encoding="utf-8")
         )
         self.assertEqual(strict_summary["representatives"], 2)
         self.assertEqual(strict_summary["alternatives"], 0)
@@ -538,10 +538,10 @@ class MockEndToEndTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
-        summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+        summary = json.loads((output / "0_log/summary.json").read_text(encoding="utf-8"))
         failed_diagnostics = "\n".join(
             path.read_text(encoding="utf-8", errors="replace")
-            for path in (output / "results" / "standalone" / "sample1" / "failed").glob(
+            for path in (output / "0_log/work/results" / "standalone" / "sample1" / "failed").glob(
                 "**/*"
             )
             if path.is_file()
@@ -550,20 +550,20 @@ class MockEndToEndTests(unittest.TestCase):
             summary["completed_binners"],
             ["remag", "concoct", "metabat2", "vamb"],
             completed.stderr
-            + (output / "logs" / "binning.classic.log").read_text(
+            + (output / "0_log/logs" / "binning.classic.log").read_text(
                 encoding="utf-8"
             )
             + failed_diagnostics,
         )
         run_metadata = json.loads(
-            (output / "config" / "run.json").read_text(encoding="utf-8")
+            (output / "0_log" / "run.json").read_text(encoding="utf-8")
         )
         self.assertEqual(run_metadata["depth_source_count"], 2)
         self.assertEqual(run_metadata["coverage_columns"], ["alpha", "beta"])
         self.assertEqual(run_metadata["coverage_column_count"], 2)
 
         normalized = (
-            output / "work" / "input" / "depth.jgi.tsv"
+            output / "0_log/work" / "input" / "depth.jgi.tsv"
         ).read_text(encoding="utf-8").splitlines()
         self.assertEqual(
             normalized[0],
@@ -572,7 +572,7 @@ class MockEndToEndTests(unittest.TestCase):
         )
         self.assertEqual(normalized[1], "c1\t100\t33\t3\tNA\t30\tNA")
 
-        preflight = output / "results" / "standalone" / "sample1" / "preflight"
+        preflight = output / "0_log/work/results" / "standalone" / "sample1" / "preflight"
         self.assertEqual(
             (preflight / "union.concoct.coverage.tsv")
             .read_text(encoding="utf-8")
@@ -586,7 +586,7 @@ class MockEndToEndTests(unittest.TestCase):
 
         branch_root = (
             output
-            / "results"
+            / "0_log/work/results"
             / "standalone"
             / "sample1"
             / "results"
@@ -611,13 +611,13 @@ class MockEndToEndTests(unittest.TestCase):
             "contig_id\talpha\tbeta",
         )
         self.assertEqual(
-            (output / "inputs" / "r000001" / "abundance.tsv")
+            (output / "0_log/work/inputs" / "r000001" / "abundance.tsv")
             .read_text(encoding="utf-8")
             .splitlines()[0],
             "contigname\talpha\tbeta",
         )
         vamb_metadata = json.loads(
-            (output / "inputs" / "r000001" / "input.json").read_text(
+            (output / "0_log/work/inputs" / "r000001" / "input.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -640,7 +640,7 @@ class MockEndToEndTests(unittest.TestCase):
             concoct_success=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+        summary = json.loads((output / "0_log/summary.json").read_text(encoding="utf-8"))
         self.assertEqual(summary["completed_binners"], ["concoct"])
 
     def test_multi_column_matrix_reaches_all_four_binners(self) -> None:
@@ -682,13 +682,13 @@ class MockEndToEndTests(unittest.TestCase):
             concoct_success=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+        summary = json.loads((output / "0_log/summary.json").read_text(encoding="utf-8"))
         self.assertEqual(
             summary["completed_binners"],
             ["remag", "concoct", "metabat2", "vamb"],
         )
         normalized = (
-            output / "work" / "input" / "depth.jgi.tsv"
+            output / "0_log/work" / "input" / "depth.jgi.tsv"
         ).read_text(encoding="utf-8").splitlines()
         self.assertEqual(
             normalized[0],
@@ -696,7 +696,7 @@ class MockEndToEndTests(unittest.TestCase):
             "donor_B\tdonor_B-var\tdonor_C\tdonor_C-var",
         )
         self.assertEqual(normalized[1], "c1\t100\t333\t3\tNA\t30\tNA\t300\tNA")
-        preflight = output / "results" / "standalone" / "sample1" / "preflight"
+        preflight = output / "0_log/work/results" / "standalone" / "sample1" / "preflight"
         self.assertEqual(
             (preflight / "union.concoct.coverage.tsv")
             .read_text(encoding="utf-8")
@@ -704,7 +704,7 @@ class MockEndToEndTests(unittest.TestCase):
             "contig_id\tdonor_A\tdonor_B\tdonor_C",
         )
         self.assertEqual(
-            (output / "inputs" / "r000001" / "abundance.tsv")
+            (output / "0_log/work/inputs" / "r000001" / "abundance.tsv")
             .read_text(encoding="utf-8")
             .splitlines()[0],
             "contigname\tdonor_A\tdonor_B\tdonor_C",
@@ -732,11 +732,11 @@ class MockEndToEndTests(unittest.TestCase):
             str(self.busco_db),
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+        summary = json.loads((output / "0_log/summary.json").read_text(encoding="utf-8"))
         self.assertEqual(summary["qc_candidates"], 0)
         self.assertEqual(summary["representatives"], 0)
-        self.assertEqual(list((output / "bins").glob("*.fa")), [])
-        self.assertTrue((output / "bins" / "manifest.tsv").is_file())
+        self.assertEqual(list((output / "3_selection/bins").glob("*.fa")), [])
+        self.assertTrue((output / "3_selection/bins" / "manifest.tsv").is_file())
 
     def test_empty_contig_input_is_a_successful_tool_free_result(self) -> None:
         empty_fasta = self.root / "empty.fa"
@@ -772,10 +772,10 @@ class MockEndToEndTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         summary = json.loads(
-            (output / "summary.json").read_text(encoding="utf-8")
+            (output / "0_log/summary.json").read_text(encoding="utf-8")
         )
         run_metadata = json.loads(
-            (output / "config" / "run.json").read_text(encoding="utf-8")
+            (output / "0_log" / "run.json").read_text(encoding="utf-8")
         )
         self.assertTrue(summary["empty_input"])
         self.assertEqual(summary["completed_binners"], [])
@@ -783,10 +783,10 @@ class MockEndToEndTests(unittest.TestCase):
         self.assertEqual(summary["discovered_bins"], 0)
         self.assertEqual(summary["representatives"], 0)
         self.assertEqual(run_metadata["contigs"], 0)
-        self.assertFalse((output / "logs").exists())
+        self.assertFalse((output / "0_log/logs").exists())
         branch_rows = (
             output
-            / "results"
+            / "0_log/work/results"
             / "standalone"
             / "empty1"
             / "branch_status.tsv"
@@ -798,8 +798,8 @@ class MockEndToEndTests(unittest.TestCase):
                 for row in branch_rows[1:]
             )
         )
-        self.assertTrue((output / "selection" / "representatives.tsv").is_file())
-        self.assertTrue((output / "bins" / "manifest.tsv").is_file())
+        self.assertTrue((output / "0_log/selection" / "representatives.tsv").is_file())
+        self.assertTrue((output / "3_selection/bins" / "manifest.tsv").is_file())
 
     def test_contigs_below_minimum_are_a_tool_free_empty_result(self) -> None:
         output = self.root / "below-minimum-input"
@@ -823,10 +823,10 @@ class MockEndToEndTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         summary = json.loads(
-            (output / "summary.json").read_text(encoding="utf-8")
+            (output / "0_log/summary.json").read_text(encoding="utf-8")
         )
         run_metadata = json.loads(
-            (output / "config" / "run.json").read_text(encoding="utf-8")
+            (output / "0_log" / "run.json").read_text(encoding="utf-8")
         )
         self.assertTrue(summary["empty_input"])
         self.assertEqual(
@@ -841,10 +841,10 @@ class MockEndToEndTests(unittest.TestCase):
         self.assertEqual(run_metadata["contigs"], 3)
         self.assertEqual(run_metadata["eligible_contigs"], 0)
         self.assertEqual(run_metadata["eligible_bp"], 0)
-        self.assertFalse((output / "logs").exists())
+        self.assertFalse((output / "0_log/logs").exists())
         branch_rows = (
             output
-            / "results"
+            / "0_log/work/results"
             / "standalone"
             / "sample1"
             / "branch_status.tsv"
@@ -856,8 +856,8 @@ class MockEndToEndTests(unittest.TestCase):
                 for row in branch_rows[1:]
             )
         )
-        self.assertTrue((output / ".complete.json").is_file())
-        self.assertTrue((output / "bins" / "manifest.tsv").is_file())
+        self.assertTrue((output / "0_log/.complete.json").is_file())
+        self.assertTrue((output / "3_selection/bins" / "manifest.tsv").is_file())
 
     def test_direct_cli_help_and_removed_options(self) -> None:
         help_result = self.run_cli("--help")
@@ -866,7 +866,7 @@ class MockEndToEndTests(unittest.TestCase):
         self.assertIn("--max-selection-contamination", help_result.stdout)
         self.assertNotIn("--kunpeng-db", help_result.stdout)
         self.assertIn("--random-seed INT", help_result.stdout)
-        self.assertIn("usage: eukbinminer", help_result.stdout)
+        self.assertIn("usage: eukbinpicker", help_result.stdout)
         self.assertIn("default: 6311", help_result.stdout)
         for removed in (
             "--input-min-contig-exclusive",
@@ -905,21 +905,21 @@ class MockEndToEndTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
         run_metadata = json.loads(
-            (output / "config" / "run.json").read_text(encoding="utf-8")
+            (output / "0_log" / "run.json").read_text(encoding="utf-8")
         )
         summary = json.loads(
-            (output / "summary.json").read_text(encoding="utf-8")
+            (output / "0_log/summary.json").read_text(encoding="utf-8")
         )
         self.assertEqual(run_metadata["random_seed"], seed)
         self.assertEqual(summary["random_seed"], seed)
         backend_environment = (
-            output / "config" / "backend.env"
+            output / "0_log/config" / "backend.env"
         ).read_text(encoding="utf-8")
         self.assertIn(f"RANDOM_SEED={seed}\n", backend_environment)
 
         branch_root = (
             output
-            / "results"
+            / "0_log/work/results"
             / "standalone"
             / "sample1"
             / "results"
@@ -996,7 +996,7 @@ class MockEndToEndTests(unittest.TestCase):
         )
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
         accepted_summary = json.loads(
-            (accepted_output / "summary.json").read_text(encoding="utf-8")
+            (accepted_output / "0_log/summary.json").read_text(encoding="utf-8")
         )
         self.assertEqual(accepted_summary["representatives"], 1)
 
@@ -1018,7 +1018,7 @@ class MockEndToEndTests(unittest.TestCase):
         )
         self.assertEqual(rejected.returncode, 0, rejected.stderr)
         rejected_summary = json.loads(
-            (rejected_output / "summary.json").read_text(encoding="utf-8")
+            (rejected_output / "0_log/summary.json").read_text(encoding="utf-8")
         )
         self.assertEqual(rejected_summary["representatives"], 0)
 
@@ -1039,7 +1039,7 @@ class MockEndToEndTests(unittest.TestCase):
             "1",
         )
         self.assertEqual(eukcc.returncode, 0, eukcc.stderr)
-        with (eukcc_output / "selection" / "representatives.tsv").open(
+        with (eukcc_output / "0_log/selection" / "representatives.tsv").open(
             encoding="utf-8",
             newline="",
         ) as handle:

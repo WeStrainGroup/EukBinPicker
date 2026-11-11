@@ -10,22 +10,10 @@ from pathlib import Path
 
 
 PROJECT = Path(__file__).resolve().parents[1]
-CLI = PROJECT / "bin" / "eukbinminer"
-LEGACY_CLI = PROJECT / "bin" / "eukmagminer"
+CLI = PROJECT / "bin" / "eukbinpicker"
 
 
 class ReferenceDatasetCliTests(unittest.TestCase):
-    def test_legacy_cli_alias_forwards_to_eukbinminer(self) -> None:
-        completed = subprocess.run(
-            [sys.executable, str(LEGACY_CLI), "--version"],
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("deprecated compatibility alias", completed.stderr)
-
     def test_run_records_explicit_qc_reference_datasets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -69,7 +57,7 @@ class ReferenceDatasetCliTests(unittest.TestCase):
             )
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            plan = json.loads((root / "output/config/run.json").read_text())
+            plan = json.loads((root / "output/0_log/run.json").read_text())
             references = plan["qc_references"]
             self.assertEqual(references["eukcc_db"], str(eukcc_db.resolve()))
             self.assertEqual(references["busco_db"], str(busco_db.resolve()))
@@ -89,7 +77,7 @@ class ReferenceDatasetCliTests(unittest.TestCase):
             fasta.write_text(">c1\nAAAA\n")
             depth.write_text("contig_id\tdepth\nc1\t1\n")
             environment = dict(os.environ)
-            environment["EUKBINMINER_EUKCC_DB"] = str(preferred)
+            environment["EUKBINPICKER_EUKCC_DB"] = str(preferred)
             environment["EUKMAGMINER_EUKCC_DB"] = str(legacy)
             completed = subprocess.run(
                 [
@@ -111,7 +99,7 @@ class ReferenceDatasetCliTests(unittest.TestCase):
                 env=environment,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            report = json.loads((root / "output/config/run.json").read_text())
+            report = json.loads((root / "output/0_log/run.json").read_text())
             self.assertEqual(
                 report["qc_references"]["eukcc_db"],
                 str(preferred.resolve()),
