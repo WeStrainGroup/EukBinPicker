@@ -2,6 +2,7 @@
 import json
 import shlex
 import unittest
+from test_multi_coverage import MODULE as cli
 
 import test_mock_end_to_end as mock
 
@@ -35,7 +36,8 @@ if "--version" not in args and "--help" not in args:
         }
         output = self.root / "all-binners"
         arguments = [*self.base_run(output), "--eukcc-db", str(self.eukcc_db)]
-        arguments += [f"--{name}-parameters={shlex.join(tokens)}" for name, tokens in parameters.items()]
+        for name, tokens in parameters.items():
+            arguments += [f"--{name}-parameters", shlex.join(tokens)]
         result = self.run_cli(*arguments, concoct_success=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         metadata = json.loads((output / "config/run.json").read_text())
@@ -54,6 +56,18 @@ if "--version" not in args and "--help" not in args:
         changed = self.run_cli(*arguments, "--remag-parameters=--epochs 201", concoct_success=True)
         self.assertNotEqual(changed.returncode, 0)
         self.assertIn("parameters or software differ", changed.stderr)
+
+    def test_quoted_single_flags_do_not_require_equals(self):
+        base = ["--sample", "x", "--contigs", "x.fa", "--coverage", "x.tsv", "--output", "out"]
+        for name, value in (("concoct", "--no_cov_normalization"), ("vamb", "-o")):
+            parsed = cli.parse_arguments([*base, f"--{name}-parameters", value])
+            self.assertEqual(getattr(parsed, f"{name}_parameters"), value)
+
+    def test_missing_native_value_does_not_consume_next_public_option(self):
+        result = self.run_cli(*self.base_run(self.root / "missing"),
+            "--concoct-parameters", "--threads", "8")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("expected one argument", result.stderr)
 
     def test_managed_options_and_invalid_parameter_strings_fail_before_output(self):
         cases = (

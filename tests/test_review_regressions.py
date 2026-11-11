@@ -105,7 +105,7 @@ class ReviewRegressionTests(unittest.TestCase):
         self.depth.write_text(original.replace("c1\t3", "c1\t9"))
         self.assertEqual(self.run_cli(*args).returncode, 2)
         self.depth.write_text(original)
-        genome = next((output / "mags").glob("*.fa"))
+        genome = next((output / "bins").glob("*.fa"))
         genome.write_text(">damaged\nACGT\n")
         result = self.run_cli(*args)
         self.assertEqual(result.returncode, 2)

@@ -469,7 +469,7 @@ class MockEndToEndTests(unittest.TestCase):
             "contigName\tcontigLen\ttotalAvgDepth\t"
             "sample1.bam\tsample1.bam-var",
         )
-        mags = sorted((output / "mags").glob("*.fa"))
+        mags = sorted((output / "bins").glob("*.fa"))
         self.assertEqual(len(mags), 1)
 
         strict_output = self.root / "busco-threshold-051"
@@ -735,8 +735,8 @@ class MockEndToEndTests(unittest.TestCase):
         summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
         self.assertEqual(summary["qc_candidates"], 0)
         self.assertEqual(summary["representatives"], 0)
-        self.assertEqual(list((output / "mags").glob("*.fa")), [])
-        self.assertTrue((output / "mags" / "manifest.tsv").is_file())
+        self.assertEqual(list((output / "bins").glob("*.fa")), [])
+        self.assertTrue((output / "bins" / "manifest.tsv").is_file())
 
     def test_empty_contig_input_is_a_successful_tool_free_result(self) -> None:
         empty_fasta = self.root / "empty.fa"
@@ -799,7 +799,7 @@ class MockEndToEndTests(unittest.TestCase):
             )
         )
         self.assertTrue((output / "selection" / "representatives.tsv").is_file())
-        self.assertTrue((output / "mags" / "manifest.tsv").is_file())
+        self.assertTrue((output / "bins" / "manifest.tsv").is_file())
 
     def test_contigs_below_minimum_are_a_tool_free_empty_result(self) -> None:
         output = self.root / "below-minimum-input"
@@ -857,7 +857,7 @@ class MockEndToEndTests(unittest.TestCase):
             )
         )
         self.assertTrue((output / ".complete.json").is_file())
-        self.assertTrue((output / "mags" / "manifest.tsv").is_file())
+        self.assertTrue((output / "bins" / "manifest.tsv").is_file())
 
     def test_direct_cli_help_and_removed_options(self) -> None:
         help_result = self.run_cli("--help")

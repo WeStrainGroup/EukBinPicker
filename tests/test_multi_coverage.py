@@ -66,6 +66,29 @@ class MultiCoverageTests(unittest.TestCase):
             "sum_of_coverage_columns",
         )
 
+    def test_full_assembly_jgi_selects_fasta_subset_in_fasta_order(self):
+        depth = self.write_depth("all.tsv",
+            "contigName\tcontigLen\ttotalAvgDepth\tA\tA-var\n"
+            "bacterial_1\t100\t9\t9\t0.5\n"
+            "c2\t4\t3\t3\t0.2\n"
+            "c1\t4\t2\t2\t0.1\n")
+        text, info = MODULE.normalized_depth_inputs((MODULE.DepthInput(depth),), self.lengths, "assembly")
+        self.assertEqual(text.splitlines()[1:], ["c1\t4\t2\t2\t0.1", "c2\t4\t3\t3\t0.2"])
+        self.assertEqual(info["extra_depth_rows_ignored"], 1)
+        self.assertEqual(info["depth_sources"][0]["selected_contig_rows"], 2)
+        depth.write_text(depth.read_text().replace("c2\t4\t3\t3\t0.2\n", ""))
+        with self.assertRaisesRegex(MODULE.UserError, "FASTA contigs lack depth"):
+            MODULE.normalized_depth_inputs((MODULE.DepthInput(depth),), self.lengths, "assembly")
+
+    def test_full_custom_table_preserves_paired_mean_and_variance(self):
+        depth = self.write_depth("custom.tsv", "id\tmean\tvar\tnote\n"
+            "extra\t9\t1\tignored\nc1\t2\t0.1\tx\nc2\t3\t0.2\ty\n")
+        text, info = MODULE.normalized_depth_inputs((MODULE.DepthInput(depth),), self.lengths, "assembly",
+            contig_column="id", coverage_columns=("mean",), variance_columns=("var",))
+        self.assertNotIn("extra\t", text)
+        self.assertEqual(info["extra_depth_rows_ignored"], 1)
+        self.assertIn("c1\t4\t2\t2\t0.1", text)
+
     def test_multi_sample_jgi_pairs_and_variances_are_preserved(self) -> None:
         depth = self.write_depth(
             "jgi.tsv",

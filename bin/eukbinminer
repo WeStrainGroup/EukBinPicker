@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import IO, Iterable, Optional, Sequence
 
 
-VERSION = "0.3.0"
+VERSION = "0.40"
 TOOL_NAME = "EukBinMiner"
 CLI_NAME = "eukbinminer"
 BINNERS = ("remag", "concoct", "metabat2", "vamb")
@@ -72,12 +72,18 @@ def note(message: str) -> None:
 
 
 def environment_value(suffix: str) -> Optional[str]:
-    """Read the EukBinMiner variable, falling back to its legacy alias."""
+    """Prefer explicit overrides, then the installer's private tool paths."""
 
     primary = f"EUKBINMINER_{suffix}"
     if primary in os.environ:
         return os.environ[primary]
-    return os.environ.get(f"EUKMAGMINER_{suffix}")
+    legacy = os.environ.get(f"EUKMAGMINER_{suffix}")
+    if legacy is not None:
+        return legacy
+    config = ROOT / "installation.json"
+    if config.is_file():
+        return json.loads(config.read_text()).get("environments", {}).get(suffix)
+    return None
 
 
 def sha256_file(path: Path) -> str:
@@ -267,7 +273,7 @@ def normalized_depth_inputs(
     sample: str,
     **column_options,
 ) -> tuple[str, dict[str, object]]:
-    """Combine one or more generic/JGI inputs into one canonical JGI table."""
+    """Select FASTA IDs from full-assembly tables, preserving means/variances."""
 
     if not inputs:
         raise UserError("at least one depth input is required")
@@ -484,6 +490,7 @@ def normalized_depth_inputs(
                 "coverage_columns": list(schema.coverage_names),
                 "coverage_column_count": schema.coverage_column_count,
                 "extra_depth_rows_ignored": source_extra_rows,
+                "selected_contig_rows": len(observed),
             }
         )
 
@@ -1027,7 +1034,7 @@ def materialize_representatives(
                     "representative_bin_id": row["representative_bin_id"],
                     "selected_binner": row["selected_binner"],
                     "source_path": source,
-                    "mag_path": destination / name,
+                    "bin_path": destination / name,
                     "sha256": sha256_file(target),
                     "bytes": target.stat().st_size,
                 }
@@ -1039,7 +1046,7 @@ def materialize_representatives(
                 "representative_bin_id",
                 "selected_binner",
                 "source_path",
-                "mag_path",
+                "bin_path",
                 "sha256",
                 "bytes",
             ),
@@ -1348,14 +1355,14 @@ def complete_empty_input_workflow(
         args.min_selection_completeness,
         args.max_selection_contamination,
     )
-    mags_manifest = materialize_representatives(selection, out / "mags")
+    bins_manifest = materialize_representatives(selection, out / "bins")
     empty_input_reason = (
         "no_input_contigs_with_depth"
         if int(input_summary["contigs"]) == 0
         else "no_input_contigs_at_minimum_bp"
     )
     summary = {
-        "schema_version": 2,
+        "schema_version": 3,
         "tool": TOOL_NAME,
         "version": VERSION,
         "sample": args.sample,
@@ -1372,8 +1379,8 @@ def complete_empty_input_workflow(
         "alternatives": 0,
         "empty_input": True,
         "empty_input_reason": empty_input_reason,
-        "non_redundant_mags": str((out / "mags").resolve()),
-        "mags_manifest_sha256": sha256_file(mags_manifest),
+        "representative_bins": str((out / "bins").resolve()),
+        "bins_manifest_sha256": sha256_file(bins_manifest),
     }
     atomic_text(
         out / "summary.json",
@@ -1391,7 +1398,7 @@ def complete_empty_input_workflow(
                 "alternatives_sha256": sha256_file(
                     selection / "alternatives.tsv"
                 ),
-                "mags_manifest_sha256": sha256_file(mags_manifest),
+                "bins_manifest_sha256": sha256_file(bins_manifest),
             },
             indent=2,
             sort_keys=True,
@@ -1425,14 +1432,14 @@ def verify_complete_output(out: Path) -> None:
             "summary_sha256": "summary.json",
             "representatives_sha256": "selection/representatives.tsv",
             "alternatives_sha256": "selection/alternatives.tsv",
-            "mags_manifest_sha256": "mags/manifest.tsv",
+            "bins_manifest_sha256": "bins/manifest.tsv",
             "run_metadata_sha256": "config/run.json",
         }.items():
             if sha256_file(out / relative) != marker[key]:
                 raise ValueError(f"checksum mismatch for {relative}")
-        _, rows = read_tsv(out / "mags/manifest.tsv")
+        _, rows = read_tsv(out / "bins/manifest.tsv")
         for row in rows:
-            genome = out / "mags" / f"{row['representative_bin_id']}.fa"
+            genome = out / "bins" / f"{row['representative_bin_id']}.fa"
             if sha256_file(genome) != row["sha256"]:
                 raise ValueError(f"checksum mismatch for {genome.name}")
     except (OSError, KeyError, ValueError) as error:
@@ -1834,10 +1841,10 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         args.min_selection_completeness,
         args.max_selection_contamination,
     )
-    mags_manifest = materialize_representatives(selection, out / "mags")
+    bins_manifest = materialize_representatives(selection, out / "bins")
 
     summary = {
-        "schema_version": 2,
+        "schema_version": 3,
         "tool": TOOL_NAME,
         "version": VERSION,
         "sample": args.sample,
@@ -1860,8 +1867,8 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
             1 for _ in (selection / "alternatives.tsv").open()
         )
         - 1,
-        "non_redundant_mags": str((out / "mags").resolve()),
-        "mags_manifest_sha256": sha256_file(mags_manifest),
+        "representative_bins": str((out / "bins").resolve()),
+        "bins_manifest_sha256": sha256_file(bins_manifest),
     }
     atomic_text(
         out / "summary.json",
@@ -1879,7 +1886,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
                 "alternatives_sha256": sha256_file(
                     selection / "alternatives.tsv"
                 ),
-                "mags_manifest_sha256": sha256_file(mags_manifest),
+                "bins_manifest_sha256": sha256_file(bins_manifest),
             },
             indent=2,
             sort_keys=True,
@@ -1966,6 +1973,7 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="FILE",
         help=(
             "coverage table(s) or coordinate-sorted indexed BAM(s); "
+            "full-assembly inputs are matched to the supplied FASTA; "
             "accepts multiple files and repeated --coverage; do not mix formats. "
             "Single-coverage tables may be named NAME=TSV"
         ),
@@ -2084,8 +2092,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    """Accept quoted native options as one value, including a lone --flag."""
+    parser = build_parser()
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    forwarded = {f"--{name}-parameters" for name in BINNERS}
+    public = set(parser._option_string_actions)
+    normalized = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in forwarded and index + 1 < len(tokens):
+            value = tokens[index + 1]
+            if value.split("=", 1)[0] not in public:
+                normalized.append(f"{token}={value}")
+                index += 2
+                continue
+        normalized.append(token)
+        index += 1
+    return parser.parse_args(normalized)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    args = parse_arguments(argv)
     try:
         run_workflow(args)
     except (UserError, OSError, ValueError) as error:
