@@ -107,19 +107,26 @@ class MultiCoverageTests(unittest.TestCase):
         self.assertEqual(summary["coverage_columns"], ["A.bam", "B.bam"])
         self.assertEqual(summary["total_avg_depth_policy"], "provided")
 
-    def test_repeated_named_two_column_files_are_combined(self) -> None:
+    def test_coverage_values_are_paths_without_alias_syntax(self):
+        path = self.root / "A=depth.tsv"
+        path.write_text("contig_id\tdepth\nc1\t1\nc2\t2\n")
+        parsed = MODULE.parse_depth_inputs([path])
+        self.assertEqual(parsed[0].path, path.resolve())
+        self.assertFalse(hasattr(parsed[0], "label"))
+
+    def test_repeated_two_column_files_use_filenames(self) -> None:
         alpha = self.write_depth(
-            "depth.tsv",
+            "alpha.tsv",
             "contig_id\tdepth\nc1\t1\nc2\t2\n",
         )
         beta = self.write_depth(
-            "other.tsv",
+            "beta.tsv",
             "contig_id\tdepth\nc1\t3\nc2\t4\n",
         )
         text, summary = MODULE.normalized_depth_inputs(
             (
-                MODULE.DepthInput(alpha, "alpha"),
-                MODULE.DepthInput(beta, "beta"),
+                MODULE.DepthInput(alpha),
+                MODULE.DepthInput(beta),
             ),
             self.lengths,
             "assembly",
@@ -186,8 +193,8 @@ class MultiCoverageTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.UserError, "1 FASTA contigs lack depth"):
             MODULE.normalized_depth_inputs(
                 (
-                    MODULE.DepthInput(alpha, "alpha"),
-                    MODULE.DepthInput(beta, "beta"),
+                    MODULE.DepthInput(alpha),
+                    MODULE.DepthInput(beta),
                 ),
                 self.lengths,
                 "assembly",

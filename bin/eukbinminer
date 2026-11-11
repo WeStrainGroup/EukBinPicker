@@ -180,32 +180,13 @@ def fasta_lengths(
 @dataclass(frozen=True)
 class DepthInput:
     path: Path
-    label: Optional[str] = None
 
 
 def parse_depth_inputs(values: Sequence[str | Path]) -> tuple[DepthInput, ...]:
-    inputs: list[DepthInput] = []
-    for raw_value in values:
-        value = str(raw_value)
-        label: Optional[str] = None
-        path_text = value
-        if "=" in value and not Path(value).expanduser().exists():
-            possible_label, possible_path = value.split("=", 1)
-            if possible_label and possible_path:
-                label = possible_label
-                path_text = possible_path
-        if label is not None and (
-            label != label.strip()
-            or any(character in label for character in "\t\r\n\x00")
-        ):
-            raise UserError(
-                f"invalid depth coverage label {label!r}; use a non-empty "
-                "TSV-safe name"
-            )
-        inputs.append(DepthInput(Path(path_text).expanduser().resolve(), label))
+    inputs = tuple(DepthInput(Path(value).expanduser().resolve()) for value in values)
     if not inputs:
         raise UserError("at least one --coverage input is required")
-    return tuple(inputs)
+    return inputs
 
 
 def resolve_coverage_inputs(args: argparse.Namespace) -> None:
@@ -222,8 +203,6 @@ def resolve_coverage_inputs(args: argparse.Namespace) -> None:
             with gzip.open(path, "rb") as handle:
                 prefix = handle.read(4)
         is_bam = prefix == b"BAM\x01" or path.suffix.lower() == ".bam"
-        if is_bam and item.label is not None:
-            raise UserError("NAME= aliases apply only to coverage tables, not BAM files")
         kinds.append("bam" if is_bam else "table")
     if len(set(kinds)) != 1:
         raise UserError("--coverage cannot mix BAM files and coverage tables in one run")
@@ -314,21 +293,13 @@ def normalized_depth_inputs(
                     schema = identify_depth_schema(columns, sample, **column_options)
                 except DepthSchemaError as error:
                     raise UserError(f"{source}: {error}") from error
-                if depth_input.label is not None:
-                    if schema.coverage_column_count != 1:
-                        raise UserError(
-                            f"{source}: NAME=PATH labels require exactly one "
-                            "coverage dimension"
-                        )
-                    override_name = depth_input.label
-                elif len(inputs) > 1 and schema.source_format in {
-                    "generic_single_coverage",
-                    "jgi_total_only",
-                }:
+                if len(inputs) > 1 and (schema.source_format in {
+                    "generic_single_coverage", "jgi_total_only",
+                } or (schema.source_format == "custom_coverage" and schema.coverage_column_count == 1)):
                     source_name = schema.source_coverage_names[0]
                     override_name = (
                         _depth_file_label(source)
-                        if source_name in generic_names
+                        if source_name in generic_names or schema.source_format == "custom_coverage"
                         else source_name
                     )
                 else:
@@ -484,7 +455,6 @@ def normalized_depth_inputs(
         source_metadata.append(
             {
                 "path": str(source),
-                "label": depth_input.label,
                 "format": schema.source_format,
                 "coverage_source_columns": list(schema.source_coverage_names),
                 "coverage_columns": list(schema.coverage_names),
@@ -1459,7 +1429,6 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         "depth_inputs": [
             {
                 "path": str(depth_input.path),
-                "label": depth_input.label,
                 "sha256": sha256_file(depth_input.path),
             }
             for depth_input in depth_inputs
@@ -1974,8 +1943,7 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
         help=(
             "coverage table(s) or coordinate-sorted indexed BAM(s); "
             "full-assembly inputs are matched to the supplied FASTA; "
-            "accepts multiple files and repeated --coverage; do not mix formats. "
-            "Single-coverage tables may be named NAME=TSV"
+            "accepts multiple files and repeated --coverage; do not mix formats"
         ),
     )
     columns = parser.add_argument_group("custom coverage table columns")

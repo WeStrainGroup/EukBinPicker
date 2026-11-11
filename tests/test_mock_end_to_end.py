@@ -495,8 +495,8 @@ class MockEndToEndTests(unittest.TestCase):
         self.assertEqual(strict_summary["alternatives"], 0)
 
     def test_repeated_mapping_depths_reach_all_four_binners(self) -> None:
-        alpha = self.root / "alpha.depth.tsv"
-        beta = self.root / "beta.depth.tsv"
+        alpha = self.root / "alpha.tsv"
+        beta = self.root / "beta.tsv"
         alpha.write_text(
             "contig_id\tdepth\nc1\t3\nc2\t2\nc3\t1\n",
             encoding="utf-8",
@@ -512,9 +512,9 @@ class MockEndToEndTests(unittest.TestCase):
             "--contigs",
             str(self.fasta),
             "--coverage",
-            f"alpha={alpha}",
+            str(alpha),
             "--coverage",
-            f"beta={beta}",
+            str(beta),
             "--output",
             str(output),
             "--binners",

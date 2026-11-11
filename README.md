@@ -6,11 +6,11 @@ Version **0.40** · [GitHub](https://github.com/WeStrainGroup/EukBinMiner)
 
 ## Introduction
 
-Genome-resolved metagenomics provides access to uncultivated eukaryotes, as illustrated by [Tara Oceans](https://pmc.ncbi.nlm.nih.gov/articles/PMC9903769/). However, fragmented assemblies, uneven coverage and diverse genome architectures make recovery challenging. Different binning methods can recover different genomes from the same sample. Following the complementary-binner rationale of [DAS Tool](https://github.com/cmks/DAS_Tool), EukBinMiner (EBM) evaluates multiple candidate sets to select representative eukaryotic bins.
+Genome-resolved metagenomics helps reveal the taxonomic and functional diversity of environmental eukaryotes and their ecological roles. However, fragmented assemblies, uneven coverage and diverse genome architectures make genome recovery challenging. Different binning methods can recover different genomes from the same sample. Following the complementary-binner rationale of [DAS Tool](https://github.com/cmks/DAS_Tool), EukBinMiner (EBM) evaluates multiple candidate sets to select representative eukaryotic bins.
 
-EBM combines [REMAG](https://github.com/danielzmbp/remag), [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://bitbucket.org/berkeleylab/metabat/) and [VAMB](https://github.com/RasmussenLab/vamb). These methods use contig sequences and coverage without requiring prokaryotic marker genes or taxonomy for binning. They offer complementary approaches: contrastive learning, Gaussian mixture models, graph clustering and variational autoencoders. REMAG specifically targets eukaryotes; the other methods are general metagenomic binners applied here to eukaryotic contigs.
+EBM combines [REMAG](https://github.com/danielzmbp/remag), [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://bitbucket.org/berkeleylab/metabat/) and [VAMB](https://github.com/RasmussenLab/vamb). These methods use contig sequences and coverage without requiring prokaryotic marker genes or taxonomy for binning and offer complementary approaches: contrastive learning, Gaussian mixture models, graph clustering and variational autoencoders.
 
-A typical workflow is to assemble quality-controlled reads, map reads to the complete assembly, and identify eukaryotic contigs with [EukContigMiner](https://github.com/WeStrainGroup/EukContigMiner). Supply the resulting eukaryotic FASTA and the full assembly's coverage table or BAM files to EBM. Coverage may come from the source sample alone or from multiple samples mapped to that assembly. **Each run processes one assembly.**
+A typical workflow is to assemble quality-controlled reads, map reads to the complete assembly, and identify eukaryotic contigs with [EukContigMiner](https://github.com/WeStrainGroup/EukContigMiner) or similar tools. Supply the resulting eukaryotic FASTA and corresponding coverage tables or BAM files to EBM. Coverage may come from the source sample alone or from multiple samples mapped to that assembly. Each run processes one assembly.
 
 ```text
 Eukaryotic contigs + full-assembly coverage tables or BAMs
@@ -27,24 +27,25 @@ Eukaryotic contigs + full-assembly coverage tables or BAMs
 
 ## Installation
 
-On **Linux x86-64**, with Conda and curl installed, one command installs and configures EBM, all four binners, EukCC, BUSCO and the BAM-processing tools:
+Install on **Linux x86-64** from the [WeStrainGroup Conda channel](https://anaconda.org/westraingroup/eukbinminer):
+
+```bash
+conda create -n eukbinminer --override-channels -c westraingroup -c conda-forge eukbinminer=0.40
+conda activate eukbinminer
+```
+
+Installation automatically downloads and configures all four binners, EukCC, BUSCO and the BAM-processing tools. Conflicting dependencies are managed in private environments; no manual tool-path configuration is needed. Internet access is required during installation.
+
+Alternatively, install directly from GitHub with Conda and curl available:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/WeStrainGroup/EukBinMiner/v0.40/install.sh | bash -s -- --prefix "$HOME/conda-envs/eukbinminer"
-```
-
-Then activate the environment:
-
-```bash
 conda activate "$HOME/conda-envs/eukbinminer"
-eukbinminer --version
 ```
 
-The installer manages conflicting dependencies in private environments automatically; no manual tool-path configuration is needed. Use a new installation directory. An interrupted installation can be resumed with the same command.
+**One installation supports both CPU and GPU execution.** CPU is the default; use `--gpu T` when running EBM to enable REMAG and VAMB acceleration. GPU execution requires a compatible NVIDIA driver and an allocated GPU. No GPU is required for installation or CPU execution.
 
-Tool versions: REMAG 0.4.4, CONCOCT 1.1.0, MetaBAT2 2.18, VAMB 5.0.4, EukCC 2.1.3 and BUSCO 6.
-
-For GPU support, add `--gpu T` to the installation command. This installs CUDA 12.4-enabled PyTorch for REMAG and VAMB; a compatible NVIDIA driver and an allocated GPU are required when running with `--gpu T`. CPU installation and CPU execution are the defaults.
+Tool versions: REMAG 0.4.4, CONCOCT 1.1.0, MetaBAT2 2.18, VAMB 5.0.4, EukCC 2.1.3 and BUSCO 6. PyTorch 2.6.0 with CUDA 12.4 supports both execution modes.
 
 Reference databases are downloaded separately: provide the unpacked [EukCC database](https://github.com/Finn-Lab/EukCC) with `--eukcc-db`, or a [BUSCO lineage](https://busco.ezlab.org/) with `--busco-db`. These paths can also be set through `EUKBINMINER_EUKCC_DB` and `EUKBINMINER_BUSCO_DB`.
 
@@ -52,14 +53,14 @@ Reference databases are downloaded separately: provide the unpacked [EukCC datab
 
 ```bash
 eukbinminer \
-  --sample sample1 \
+  --sample sample_1 \
   --contigs euk_contigs.fa \
   --coverage assembly_depth.tsv \
   --eukcc-db /path/to/eukcc_db \
-  --output sample1_ebm
+  --output sample_1_ebm
 ```
 
-By default, EBM runs all four binners on CPU with 4 threads, retains contigs ≥1,500 bp, and assesses bins ≥500,000 bp with EukCC. Selected FASTA files are written to `sample1_ebm/bins/`.
+By default, EBM runs all four binners on CPU with 4 threads, retains contigs ≥1,500 bp, and assesses bins ≥500,000 bp with EukCC. Selected FASTA files are written to `sample_1_ebm/bins/`.
 
 ## Coverage input
 
@@ -82,14 +83,14 @@ contig_3	5.7	2.1	0.8	0.3
 
 ```bash
 eukbinminer \
-  --sample sample1 \
+  --sample sample_1 \
   --contigs euk_contigs.fa \
   --coverage custom.tsv \
   --cov-contig-column sequence_id \
   --cov-mean-column A_mean,B_mean \
   --cov-variance-column A_var,B_var \
   --eukcc-db /path/to/eukcc_db \
-  --output sample1_ebm
+  --output sample_1_ebm
 ```
 
 If the FASTA contains only `contig_1` and `contig_3`, only those rows enter binning. Contig IDs must be unique, values finite and non-negative, and any supplied contig lengths must match the FASTA. Input tables are validated before subsetting.
@@ -100,11 +101,11 @@ Variance columns are optional and pair with mean columns in the same order. Meta
 
 ```bash
 eukbinminer \
-  --sample sample1 \
+  --sample sample_1 \
   --contigs euk_contigs.fa \
   --coverage sample_A.bam sample_B.bam \
   --eukcc-db /path/to/eukcc_db \
-  --output sample1_ebm
+  --output sample_1_ebm
 ```
 
 Provide one coordinate-sorted BAM per mapping sample, each with a `.bai` or `.csi` index, unique basename, and the same ordered reference IDs and lengths. The eukaryotic FASTA must be a matching subset of the mapped assembly. EBM reuses these alignments without remapping reads.
@@ -120,12 +121,12 @@ The installer includes SAMtools and `jgi_summarize_bam_contig_depths`. JGI produ
 | `--sample` | Required | Assembly/sample label: letters, digits, `.`, `_` or `-`. |
 | `--contigs` | Required | Eukaryotic contig FASTA with unique IDs. |
 | `--coverage` | Required | One or more coverage tables or indexed BAMs; repeatable. |
+| `--cov-contig-column` | Auto | Contig ID column name in custom tables. |
+| `--cov-mean-column` | Auto | Mean-coverage column names in custom tables, comma-separated. |
+| `--cov-variance-column` | Auto | Coverage-variance column names in custom tables, comma-separated and paired with means. |
 | `--output` | Required | Run output directory. |
-| `--cov-contig-column` | Auto | Contig ID column in custom tables. |
-| `--cov-mean-column` | Auto | Comma-separated mean columns, in sample order. |
-| `--cov-variance-column` | None | Observed variance columns paired with mean columns. |
 
-Column selectors apply only to tables, and the same selectors apply to every supplied table. Single-coverage tables can be named explicitly with `--coverage sample_A=sample_A.tsv`.
+Standard formats are detected automatically. For custom schemas, specify the contig and mean columns together; variance columns are optional. Selectors apply only to tables, and the same selectors apply to every supplied table. Coverage dimensions use table headers, or filenames for multiple generic or custom single-coverage tables.
 
 ### Binning and resources
 
@@ -142,6 +143,8 @@ Column selectors apply only to tables, and the same selectors apply to every sup
 
 REMAG and VAMB run sequentially, so one allocated GPU can serve both. CONCOCT, MetaBAT2 and QC remain on CPU. `--gpu T` checks CUDA availability in the selected GPU-capable tools; it does not request hardware from a scheduler.
 
+Native algorithm defaults are retained, with the shared input threshold and seed. REMAG's classifier is skipped. CONCOCT uses standard 10-kb fragments, native normalization and 400 clusters. MetaBAT2 and REMAG retain their native 200-kb and 500-kb output minima. VAMB retains native training and bin splitting, with nonempty FASTA export enabled. The retention setting does not lower these native minima.
+
 ### Quality assessment
 
 | Parameter | Default | Description |
@@ -151,7 +154,7 @@ REMAG and VAMB run sequentially, so one allocated GPU can serve both. CONCOCT, M
 | `--eukcc-db` | Environment | Unpacked EukCC database; required when EukCC is selected. |
 | `--busco-db` | Environment | Unpacked BUSCO lineage containing `dataset.cfg` and `hmms/`. |
 
-To rank with BUSCO, include it in `--qc-tools` and set `--qc-decision busco`. BUSCO duplicated percentage is used as a contamination proxy; it is not equivalent to EukCC's contamination estimate.
+To rank with BUSCO, include it in `--qc-tools` and set `--qc-decision busco`. BUSCO duplicated percentage is used as a contamination proxy.
 
 ### Filtering and selection
 
@@ -180,16 +183,16 @@ Use the tool's native option names inside one quoted string:
 
 ```bash
 eukbinminer \
-  --sample sample1 \
+  --sample sample_1 \
   --contigs euk_contigs.fa \
   --coverage assembly_depth.tsv \
   --eukcc-db /path/to/eukcc_db \
-  --output sample1_custom \
+  --output sample_1_custom \
   --concoct-parameters "--clusters 200" \
   --metabat2-parameters "--maxP 90"
 ```
 
-No `=` is required. Input/output paths, threads, seeds, devices and shared input-length settings are managed by EBM; use their public EBM options instead. Native options and actual commands are recorded with the run.
+Input/output paths, threads, seeds, devices and shared input-length settings are managed by EBM; use their public EBM options instead. Native options and actual commands are recorded with the run.
 
 ## How selection works
 
@@ -206,8 +209,6 @@ overlap(A, B) = shared_contig_bp / min(length(A), length(B))
 ```
 
 The default cutoff is 0.50. This selects the highest-ranked representative among competing cross-binner candidates within the assembly. Shared contigs must match in original ID and normalized sequence; overlap is a proxy for competing genome reconstructions, not a taxonomic identity test. Bins from the same binner are not compared. EBM preserves complete candidate bins without merging, splitting or refinement.
-
-Native algorithm defaults are retained, with the shared input threshold and seed. REMAG's classifier is skipped. CONCOCT uses standard 10-kb fragments, native normalization and 400 clusters. MetaBAT2 and REMAG retain their native 200-kb and 500-kb output minima. VAMB retains native training and bin splitting, with nonempty FASTA export enabled. The retention setting does not lower these native minima.
 
 ## Outputs
 

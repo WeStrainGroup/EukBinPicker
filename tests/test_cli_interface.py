@@ -135,13 +135,13 @@ if "--version" not in args:
             handle.write("id\tmean\tvar\nc1\t4\t8\nc2\t0\t0\nc3\t2\t1\n")
         output = self.root / "custom-columns"
         result = self.run_cli("--output", str(output), "--sample", "s", "--contigs", str(self.fasta),
-            "--coverage", f"A={self.depth}", f"B={second}",
+            "--coverage", str(self.depth), str(second),
             "--cov-contig-column", "id", "--cov-mean-column", "mean",
             "--cov-variance-column", "var", "--eukcc-db", str(self.eukcc_db))
         self.assertEqual(result.returncode, 0, result.stderr)
         plan = json.loads((output / "config/run.json").read_text())
         self.assertEqual(plan["coverage_input"], "table")
-        self.assertEqual(plan["coverage_columns"], ["A", "B"])
+        self.assertEqual(plan["coverage_columns"], ["depth", "second"])
         self.assertEqual(plan["variance_available"], [True, True])
 
     def test_bam_signature_without_extension_routes_to_bam_validation(self):

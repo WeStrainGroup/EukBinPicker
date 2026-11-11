@@ -1,0 +1,27 @@
+{% set version = "0.40" %}
+package:
+  name: eukbinminer
+  version: {{ version }}
+source:
+  path: ..
+build:
+  number: 0
+  noarch: generic
+requirements:
+  run:
+    - __linux
+    - python >=3.12,<3.13
+    - bash
+    - conda >=24
+about:
+  home: https://github.com/WeStrainGroup/EukBinMiner
+  license: CC-BY-NC-SA-4.0
+  license_file: LICENSE
+  summary: Recover eukaryotic genome bins with complementary binning methods
+  description: |
+    Installs and configures four binners, EukCC, BUSCO and BAM tools in private
+    runtimes. Installation requires internet access and Linux x86-64. One CUDA
+    runtime supports both CPU execution and NVIDIA GPU execution.
+extra:
+  recipe-maintainers:
+    - WeStrainGroup

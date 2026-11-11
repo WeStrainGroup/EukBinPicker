@@ -20,31 +20,34 @@ def run(command: list[str]) -> None:
     subprocess.run(command, check=True)
 
 
-def install(prefix: Path, conda: str, gpu: str) -> None:
+def install(prefix: Path, conda: str) -> None:
     prefix = prefix.expanduser().resolve()
     conda = str(Path(shutil.which(conda) or conda).resolve())
-    marker = prefix / ".ebm-installing.json"
-    settings = {"version": VERSION, "gpu": gpu, "conda": conda}
-    if prefix.exists():
-        if not marker.is_file() or json.loads(marker.read_text()) != settings:
-            raise ValueError(f"use a new installation directory: {prefix}")
-    else:
-        prefix.mkdir(parents=True)
-        marker.write_text(json.dumps(settings))
-
+    state = prefix.with_name("." + prefix.name + ".ebm-install")
+    marker = state / "settings.json"
+    settings = {"version": VERSION, "runtime": "cu124", "conda": conda}
     package = prefix / "share/eukbinminer"
-    logs = prefix / "share/eukbinminer/install"
-    logs.mkdir(parents=True, exist_ok=True)
-    cache = package / "install-cache"
+    installed = package / "installation.json"
+    record = marker if marker.is_file() else installed
+    if prefix.exists() or state.exists():
+        if not record.is_file() or any(json.loads(record.read_text()).get(k) != v
+                                       for k, v in settings.items()):
+            raise ValueError(f"use a new installation directory: {prefix}")
+    state.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps(settings))
+    logs = state / "logs"
+    logs.mkdir(exist_ok=True)
+    cache = state / "cache"
     for name in ("conda", "pip", "xdg", "tmp"):
         (cache / name).mkdir(parents=True, exist_ok=True)
-    # Keep downloads and build files off quota-limited home directories.
+    # Temporary files stay outside the environment being created.
     os.environ.update(CONDA_PKGS_DIRS=str(cache / "conda"),
                       PIP_CACHE_DIR=str(cache / "pip"),
                       XDG_CACHE_HOME=str(cache / "xdg"), TMPDIR=str(cache / "tmp"),
                       CONDA_REGISTER_ENVS="false")
     completed = logs / "steps.json"
-    steps = set(json.loads(completed.read_text())) if completed.exists() else set()
+    previous = completed if completed.exists() else package / "install/steps.json"
+    steps = set(json.loads(previous.read_text())) if previous.exists() else set()
     if not (prefix / "bin/python").is_file():
         steps.discard("core")
 
@@ -69,9 +72,8 @@ def install(prefix: Path, conda: str, gpu: str) -> None:
 
     step("core", [create(prefix, ["python=3.12", "pip", "seqkit", "miniprot=0.18"])])
     python = str(prefix / "bin/python")
-    torch_index = "cu124" if gpu == "T" else "cpu"
-    step("pytorch", [[python, "-m", "pip", "install", "torch==2.6.0", "--index-url",
-                      f"https://download.pytorch.org/whl/{torch_index}"]])
+    step("pytorch", [[python, "-m", "pip", "install", "torch==2.6.0+cu124", "--index-url",
+                      "https://download.pytorch.org/whl/cu124"]])
     step("neural_binners", [[python, "-m", "pip", "install", "vamb==5.0.4", "remag==0.4.4"],
                             [python, "-m", "pip", "check"]])
 
@@ -111,8 +113,8 @@ def install(prefix: Path, conda: str, gpu: str) -> None:
                     [str(prefix / "bin/vamb"), "--help"],
                     [str(prefix / "bin/seqkit"), "version"]]:
         run(command)
-    run([python, "-c", "import torch; assert torch.version.cuda is not None" if gpu == "T"
-         else "import torch; assert torch.version.cuda is None"])
+    run([python, "-c", "import torch; assert torch.version.cuda == '12.4'; "
+         "assert torch.ones(2, device='cpu').sum().item() == 2"])
 
     for name in ("scripts", "envs"):
         shutil.copytree(SOURCE / name, package / name, dirs_exist_ok=True)
@@ -125,22 +127,21 @@ def install(prefix: Path, conda: str, gpu: str) -> None:
     (prefix / "bin/eukbinminer").chmod(0o755)
     # Activation selects the exact interpreter and native executables together.
     run([conda, "run", "--no-capture-output", "-p", str(prefix), "eukbinminer", "--version"])
-    marker.unlink()
-    shutil.rmtree(cache)
-    print(f"\nInstalled EukBinMiner {VERSION}. Activate with:\nconda activate {prefix}")
+    shutil.copytree(logs, package / "install", dirs_exist_ok=True)
+    shutil.rmtree(state)
+    print(f"\nInstalled EukBinMiner {VERSION}.")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--help", action="help")
     parser.add_argument("--prefix", type=Path, required=True)
-    parser.add_argument("--gpu", choices=("T", "F"), default="F")
     parser.add_argument("--conda", default=os.environ.get("CONDA_EXE", "conda"), help=argparse.SUPPRESS)
     args = parser.parse_args()
     if platform.system() != "Linux" or platform.machine() not in {"x86_64", "AMD64"}:
         parser.error("the bundled installer requires Linux x86-64")
     try:
-        install(args.prefix, args.conda, args.gpu)
+        install(args.prefix, args.conda)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"Installation failed: {error}\nFix the reported error and repeat the same command to resume.", file=sys.stderr)
         return 1

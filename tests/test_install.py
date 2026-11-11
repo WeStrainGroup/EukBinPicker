@@ -35,11 +35,11 @@ class InstallerTests(unittest.TestCase):
     def test_install_configures_all_tools_without_shell_exports(self):
         with patch.dict(os.environ, {}, clear=False), patch.object(installer, "run", self.fake_run), \
                 patch.object(installer.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "Usage", "")):
-            installer.install(self.prefix, "/mock/conda", "F")
+            installer.install(self.prefix, "/mock/conda")
         package = self.prefix / "share/eukbinminer"
         config = json.loads((package / "installation.json").read_text())
         self.assertEqual(config["version"], "0.40")
-        self.assertFalse((self.prefix / ".ebm-installing.json").exists())
+        self.assertFalse((self.prefix.with_name("." + self.prefix.name + ".ebm-install") / "settings.json").exists())
         self.assertFalse((package / "install-cache").exists())
         self.assertTrue((self.prefix / "bin/eukbinminer").is_file())
         for tool in ("concoct", "metabat2", "eukcc", "busco"):
@@ -48,7 +48,7 @@ class InstallerTests(unittest.TestCase):
         flattened = " ".join(" ".join(x) for x in self.commands)
         for requirement in ("vamb==5.0.4", "remag==0.4.4", "samtools>=1.17", "busco=6"):
             self.assertIn(requirement, flattened)
-        self.assertIn("https://download.pytorch.org/whl/cpu", flattened)
+        self.assertIn("https://download.pytorch.org/whl/cu124", flattened)
         with patch.object(cli, "ROOT", package), patch.dict(os.environ, {}, clear=True):
             self.assertEqual(cli.environment_value("EUKCC_ENV"), str(package / "environments/eukcc"))
             with patch.dict(os.environ, {"EUKBINMINER_EUKCC_ENV": "explicit"}):
@@ -59,13 +59,13 @@ class InstallerTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=False), patch.object(installer, "run", self.fake_run), \
                 patch.object(installer.subprocess, "run", return_value=failed):
             with self.assertRaisesRegex(RuntimeError, "validation failed"):
-                installer.install(self.prefix, "/mock/conda", "T")
+                installer.install(self.prefix, "/mock/conda")
         self.assertFalse((self.prefix / "bin/eukbinminer").exists())
-        self.assertTrue((self.prefix / ".ebm-installing.json").is_file())
+        self.assertTrue((self.prefix.with_name("." + self.prefix.name + ".ebm-install") / "settings.json").is_file())
         self.commands.clear()
         with patch.dict(os.environ, {}, clear=False), patch.object(installer, "run", self.fake_run), \
                 patch.object(installer.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")):
-            installer.install(self.prefix, "/mock/conda", "T")
+            installer.install(self.prefix, "/mock/conda")
         self.assertFalse(any("--prefix" in command for command in self.commands))
         self.assertTrue((self.prefix / "bin/eukbinminer").is_file())
 
@@ -74,7 +74,7 @@ class InstallerTests(unittest.TestCase):
         sentinel = self.prefix / "keep"
         sentinel.write_text("unchanged")
         with self.assertRaisesRegex(ValueError, "new installation directory"):
-            installer.install(self.prefix, "/mock/conda", "F")
+            installer.install(self.prefix, "/mock/conda")
         self.assertEqual(sentinel.read_text(), "unchanged")
 
     def test_resume_repairs_package_records_left_without_python(self):
@@ -82,14 +82,14 @@ class InstallerTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=False), patch.object(installer, "run", self.fake_run), \
                 patch.object(installer.subprocess, "run", return_value=failed):
             with self.assertRaises(RuntimeError):
-                installer.install(self.prefix, "/mock/conda", "F")
+                installer.install(self.prefix, "/mock/conda")
         (self.prefix / "bin/python").unlink()
         (self.prefix / "conda-meta/python.json").write_text(json.dumps(
             {"name": "python", "version": "3.12.16", "build": "test_0"}))
         self.commands.clear()
         with patch.dict(os.environ, {}, clear=False), patch.object(installer, "run", self.fake_run), \
                 patch.object(installer.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")):
-            installer.install(self.prefix, "/mock/conda", "F")
+            installer.install(self.prefix, "/mock/conda")
         self.assertIn("--force-reinstall", self.commands[0])
         self.assertIn("python=3.12.16=test_0", self.commands[0])
         self.assertLess(self.commands[0].index("--force-reinstall"),
