@@ -2,8 +2,6 @@
 
 **Recover eukaryotic genome bins with complementary binning methods.**
 
-Version **0.3** · [GitHub](https://github.com/WeStrainGroup/EukBinPicker)
-
 ## Introduction
 
 Genome-resolved metagenomics helps reveal eukaryotic diversity and function, but genome recovery remains challenging. A typical workflow assembles quality-controlled reads, maps reads to the complete assembly, and identifies eukaryotic contigs with [EukContigMiner](https://github.com/WeStrainGroup/EukContigMiner) or similar tools. These contigs and their coverage profiles are then used to recover metagenome-assembled genomes (MAGs).
@@ -19,14 +17,14 @@ EBP integrates [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://
 Install with Conda on Linux x86-64:
 
 ```bash
-conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.3
+conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.3.1
 conda activate eukbinpicker
 ```
 
 Or install from GitHub with Conda and curl available:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/WeStrainGroup/EukBinPicker/v0.3/install.sh | bash -s -- --prefix "$HOME/conda-envs/eukbinpicker"
+curl -fsSL https://raw.githubusercontent.com/WeStrainGroup/EukBinPicker/v0.3.1/install.sh | bash -s -- --prefix "$HOME/conda-envs/eukbinpicker"
 conda activate "$HOME/conda-envs/eukbinpicker"
 ```
 
@@ -34,7 +32,9 @@ Download reference databases separately. Provide an unpacked [EukCC database](ht
 
 ## Quick start
 
-### Bin contigs
+### From contigs
+
+Bin eukaryotic contigs using their coverage profiles, then select representative bins.
 
 ```bash
 eukbinpicker \
@@ -45,17 +45,21 @@ eukbinpicker \
   --output sample_1_ebp
 ```
 
-### Select from existing bins
+### From existing bin sets
+
+Select representative bins from existing bin sets.
 
 ```bash
 eukbinpicker \
   --sample sample_1 \
   --bins /path/to/bins_A /path/to/bins_B \
   --eukcc-db /path/to/eukcc_db \
-  --output sample_1_selection
+  --output sample_1_ebp
 ```
 
-### Combine new and existing bins
+### From both
+
+Run new binning and select representatives jointly with existing bins from the same assembly.
 
 ```bash
 eukbinpicker \
@@ -64,32 +68,20 @@ eukbinpicker \
   --coverage assembly_depth.tsv \
   --bins /path/to/bins_A /path/to/bins_B \
   --eukcc-db /path/to/eukcc_db \
-  --output sample_1_combined
+  --output sample_1_ebp
 ```
 
-Binning defaults to all four tools, CPU, 4 threads and contigs ≥1,500 bp. Bins ≥500,000 bp enter EukCC assessment. Selected FASTA files are written to `3_selection/bins/` within the output directory.
+Selected FASTA files are written to `3_selection/bins/` within the output directory.
 
-## Inputs
+## Coverage inputs
 
-### Contigs and existing bins
+`--coverage`: coverage tables **or** indexed BAMs. Do not mix the two formats. Map reads from the source sample or multiple samples to the same assembly. Full-assembly coverage is accepted; EBP extracts the supplied contigs. Every input must include all FASTA contig IDs, including those below the length threshold. Zero coverage is valid; missing entries are not.
 
-Supply eukaryotic contigs for binning and eukaryotic bins for import. EBP does not classify inputs; REMAG's classifier is skipped. All inputs must come from the same assembly and retain original contig IDs.
+### Tables
 
-`--contigs` is required with `--coverage`. Coverage may represent the source sample alone or multiple samples mapped to that assembly. Full-assembly coverage is supported: EBP selects rows matching the supplied FASTA and preserves their values. Every supplied FASTA contig must have coverage, including those below the length threshold; missing values are not filled with zero.
+Use tab-separated tables with headers, optionally gzip-compressed. JGI depth tables and mean-coverage matrices are detected automatically. IDs must be unique, values finite and non-negative, and supplied contig lengths must match the FASTA.
 
-`--bins` accepts one directory per source, including tools or parameter settings outside the bundled binners. Each directory must directly contain `.fa`, `.fna` or `.fasta` files, optionally gzip-compressed. Multiple directories and repeated `--bins` arguments are supported; subdirectories are not searched.
-
-Directory names label imported sources. Conflicting names receive numeric suffixes, such as `metabat2_2`. EBP records paths and checksums, validates FASTA structure, and trusts assembly provenance. Imported bins need no coverage and remain intact, including contigs below `--min-input-length`. Retained bins are copied to `1_raw/`; gzip files are decompressed and source files are unchanged.
-
-With `--bins` alone, omit contigs, coverage and binner options. With combined input, generated and imported bins retain separate source labels and enter one shared QC and selection workflow.
-
-### Coverage tables
-
-`--coverage` accepts one or more tab-separated tables with headers, either plain or gzip-compressed. Standard JGI depth tables and mean-coverage matrices are detected automatically. Multiple files and repeated `--coverage` arguments are supported; all must refer to the same assembly.
-
-For custom columns, provide the contig and mean column names together. Variance columns are optional and pair with means in the same order. The same selectors apply to every input table. Coverage dimensions use table headers, or filenames for multiple single-coverage generic/custom tables.
-
-For example, `custom.tsv`:
+For custom headers, specify the contig and mean columns. For this table:
 
 ```txt
 sequence_id	A_mean	B_mean	A_var	B_var
@@ -97,38 +89,21 @@ contig_1	12.4	8.1	2.0	1.4
 contig_2	0.0	3.2	0.0	0.6
 ```
 
-```bash
-eukbinpicker \
-  --sample sample_1 \
-  --contigs euk_contigs.fa \
-  --coverage custom.tsv \
-  --cov-contig-column sequence_id \
-  --cov-mean-column A_mean,B_mean \
-  --cov-variance-column A_var,B_var \
-  --eukcc-db /path/to/eukcc_db \
-  --output sample_1_ebp
+Add these options to the binning command:
+
+```txt
+--cov-contig-column sequence_id
+--cov-mean-column A_mean,B_mean
+--cov-variance-column A_var,B_var
 ```
 
-Contig IDs must be unique, values finite and non-negative, and any supplied lengths must match the FASTA. Tables are validated before subsetting.
+Variance columns are optional and follow the mean-column order. If using MetaBAT2, provide variance for all coverage dimensions or none. Column settings apply to every table.
 
-MetaBAT2 uses observed variance when available and native `--cvExt` mode for mean-only input; variance must cover all dimensions or none when MetaBAT2 is selected. REMAG, CONCOCT and VAMB use means. With table input, CONCOCT approximates fragment coverage using each parent contig's mean.
+### BAMs
 
-### BAM files
+Use one coordinate-sorted BAM per mapping sample, each with a `.bai` or `.csi` index. BAM basenames must be unique; reference IDs, lengths and order must match across BAMs. The contig FASTA must match a subset of these references.
 
-Use BAM files in place of coverage tables:
-
-```bash
-eukbinpicker \
-  --sample sample_1 \
-  --contigs euk_contigs.fa \
-  --coverage sample_A.bam sample_B.bam \
-  --eukcc-db /path/to/eukcc_db \
-  --output sample_1_ebp
-```
-
-Provide one coordinate-sorted BAM per mapping sample, each with a `.bai` or `.csi` index, a unique basename, and the same ordered reference IDs and lengths. The input FASTA must be a matching subset of the mapped assembly. Do not mix BAMs and tables in one run.
-
-EBP reuses alignments without remapping. The installer includes SAMtools and `jgi_summarize_bam_contig_depths`; JGI calculates contig means and variances, while CONCOCT calculates fragment coverage directly from BAMs.
+Example: `--coverage sample_A.bam sample_B.bam`. EBP calculates coverage from the alignments without remapping reads.
 
 ## Parameters
 
@@ -141,13 +116,13 @@ Default values are shown below. **—** means no preset value; input requirement
 | `--sample` | — | Required sample label: letters, digits, `.`, `_` or `-`. |
 | `--contigs` | — | Eukaryotic FASTA with unique IDs; required with `--coverage`. |
 | `--coverage` | — | Coverage tables or indexed BAMs; multiple files and repeated arguments accepted. |
-| `--bins` | — | Existing bin directories; multiple directories and repeated arguments accepted. |
+| `--bins` | — | One directory per source, one FASTA per bin (`.fa`, `.fna`, `.fasta`, optionally `.gz`); no nested directories. Multiple inputs accepted. |
 | `--cov-contig-column` | — | Contig ID column in custom tables. |
 | `--cov-mean-column` | — | Comma-separated mean columns in custom tables. |
 | `--cov-variance-column` | — | Comma-separated variance columns, paired with means. |
 | `--output` | — | Required output directory. |
 
-Provide `--coverage`, `--bins`, or both. Coverage-column selectors apply only to tables; omit them for automatic format detection.
+Provide `--coverage`, `--bins`, or both. Use eukaryotic inputs from the same assembly with original contig IDs. Imported bins remain intact; assembly provenance is assumed. Coverage-column selectors apply only to tables; omit them for automatic detection.
 
 ### Binning and resources
 
@@ -162,7 +137,9 @@ Provide `--coverage`, `--bins`, or both. Coverage-column selectors apply only to
 | `--metabat2-parameters` | — | Quoted native MetaBAT2 options. |
 | `--vamb-parameters` | — | Quoted native VAMB options. |
 
-EBP retains native algorithm defaults with a shared input threshold and seed. CONCOCT uses 10-kb fragments, native normalization and 400 clusters. MetaBAT2 and REMAG retain their native 200-kb and 500-kb output minima. VAMB retains native training and bin splitting, with nonempty FASTA export enabled. `--min-retain-length` does not lower native output minima.
+EBP retains native algorithm defaults with a shared input threshold and seed. CONCOCT uses 10-kb fragments, native normalization and 400 clusters. MetaBAT2 and REMAG retain their native 200-kb and 500-kb output minima. VAMB retains native training and bin splitting, with nonempty FASTA export enabled. `--min-retain-length` does not lower native output minima. REMAG's classifier is skipped: supply contigs already identified as eukaryotic.
+
+MetaBAT2 uses observed variance or native mean-only coverage; REMAG, CONCOCT and VAMB use means. CONCOCT calculates fragment coverage from BAMs, or approximates it from parent-contig means when given tables.
 
 To customize a binner, pass native options in one quoted string:
 
@@ -176,8 +153,6 @@ eukbinpicker \
   --concoct-parameters "--clusters 200" \
   --metabat2-parameters "--maxP 90"
 ```
-
-Use EBP options for input/output paths, threads, seeds, devices and input length. Native options and executed commands are recorded with the run.
 
 REMAG and VAMB run sequentially and can share one allocated GPU. CONCOCT, MetaBAT2 and QC use CPU. `--gpu T` checks CUDA availability; it does not request hardware from a scheduler.
 
@@ -221,13 +196,13 @@ Candidates passing the length and QC thresholds are ranked by:
 score = completeness − contamination_penalty × contamination
 ```
 
-EBP visits candidates in descending quality order. A candidate is excluded if its overlap with an already selected bin from a different source reaches `--min-overlap` (default: 0.50):
+EBP considers candidates in descending quality order. If a candidate overlaps an already selected, higher-ranked bin from a different source within the same assembly, and the overlap reaches `--min-overlap` (default: 0.50), that selected bin represents the candidate. Otherwise, the candidate is retained as another representative.
 
 ```txt
 overlap(A, B) = shared_contig_bp / min(length(A), length(B))
 ```
 
-A source is one native binner or one imported directory. Bins within a source are not compared. Shared contigs must match in original ID and normalized sequence; overlap identifies competing reconstructions, not taxonomic identity. EBP preserves complete candidate bins without merging, splitting or refinement.
+A source is one native binner or one imported directory. Bins within a source are not compared. Shared contigs must match in original ID and normalized sequence; overlap is a proxy for competing reconstructions, not a taxonomic identity test. EBP preserves complete candidate bins without merging, splitting or refinement.
 
 ## Outputs
 
@@ -235,14 +210,10 @@ A source is one native binner or one imported directory. Bins within a source ar
 | --- | --- |
 | `0_log/` | Input metadata, run summary, commands and internal records. |
 | `1_raw/` | Retained bin FASTA files, grouped by source. |
-| `2_qc/eukcc/`, `2_qc/busco/` | Results from each requested QC tool. |
-| `2_qc/summary.tsv` | Source, SeqKit statistics and QC metrics for each assessed bin. |
-| `3_selection/representatives.tsv` | Selected representatives, quality metrics, shared-contig statistics and represented bins. |
-| `3_selection/bins/` | Selected FASTA files and their checksum manifest. |
+| `2_qc/` | Per-tool QC results and `summary.tsv` with source, SeqKit statistics and QC metrics for each assessed bin. |
+| `3_selection/` | `bins/` with selected FASTAs and checksums; `representatives.tsv` with quality metrics, shared-contig statistics and represented bins. |
 
-`represented_bins` lists each representative and its excluded alternatives. Candidates matching multiple representatives receive one primary assignment; all matches are recorded in `0_log/selection/alternatives.tsv`.
-
-Check `0_log/summary.json` for completed native binners, imported sources and selection counts. Imported candidates can still be processed if native branches fail or no contigs pass the input-length threshold. Reusing an output directory requires matching inputs, parameters, software and intact outputs; otherwise, use a new directory.
+Check `0_log/summary.json` for source and selection counts. The `native_binner_status` field distinguishes `completed`, `failed` and `skipped_empty_input`; completion does not imply that a binner produced bins. Logs are in `0_log/logs/`. Imported candidates can still be processed if native branches fail or no contigs pass the input-length threshold. Reusing an output directory requires matching inputs, parameters, software and intact outputs; otherwise, use a new directory.
 
 ## License
 

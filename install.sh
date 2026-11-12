@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install from this checkout, or fetch the matching release when piped to bash.
 set -euo pipefail
-VERSION=0.3
+VERSION=0.3.1
 CONDA_BIN="${CONDA_EXE:-$(command -v conda || true)}"
 [[ -n "$CONDA_BIN" ]] || { echo 'Conda is required.' >&2; exit 2; }
 BASE="$("$CONDA_BIN" info --base)"

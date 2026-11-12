@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import IO, Iterable, Optional, Sequence
 
 
-VERSION = "0.3"
+VERSION = "0.3.1"
 TOOL_NAME = "EukBinPicker"
 CLI_NAME = "eukbinpicker"
 BINNERS = ("remag", "concoct", "metabat2", "vamb")
@@ -1372,6 +1372,7 @@ def complete_empty_input_workflow(
         "imported_sources": list(args.bin_sources),
         "completed_binners": [],
         "completed_native_binners": [],
+        "native_binner_status": {binner: "skipped_empty_input" for binner in args.binner_list},
         "qc_tools": list(args.qc_list),
         "decision_qc": args.qc_decision,
         "random_seed": args.random_seed,
@@ -1872,6 +1873,11 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         "imported_sources": list(args.bin_sources),
         "completed_binners": list(completed_sources),
         "completed_native_binners": list(completed_binners),
+        "native_binner_status": {
+            binner: ("skipped_empty_input" if not input_summary["eligible_contigs"]
+                     else "completed" if binner in completed_binners else "failed")
+            for binner in args.binner_list
+        },
         "qc_tools": list(args.qc_list),
         "decision_qc": args.qc_decision,
         "random_seed": args.random_seed,
@@ -1974,7 +1980,7 @@ def add_workflow_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def add_run_arguments(parser: argparse.ArgumentParser) -> None:
-    required = parser.add_argument_group("required arguments")
+    required = parser.add_argument_group("input and output")
     required.add_argument(
         "--sample",
         required=True,
@@ -2105,9 +2111,18 @@ def build_parser() -> argparse.ArgumentParser:
         prog=CLI_NAME,
         allow_abbrev=False,
         add_help=False,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Input modes:\n"
+            "  From contigs: --contigs FASTA --coverage FILE [FILE ...]\n"
+            "  From existing bins: --bins DIR [DIR ...]\n"
+            "  From both: --contigs FASTA --coverage FILE [FILE ...] --bins DIR [DIR ...]\n\n"
+            "All modes require --sample and --output, plus a database for each selected QC tool.\n"
+            "Selected FASTA files: OUTPUT/3_selection/bins/"
+        ),
         description=(
-            "Mine quality-controlled, non-redundant eukaryotic bins from "
-            "contigs with coverage tables/BAMs, or existing bin sets."
+            "Recover eukaryotic genome bins with complementary binning methods. "
+            "Bin contigs, import existing bin sets, or combine both."
         ),
     )
     parser.add_argument("--help", action="help", help="show this help message and exit")
