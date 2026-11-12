@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.2.1"
+VERSION = "0.3"
 SOURCE = Path(__file__).resolve().parents[1]
 
 
@@ -118,7 +118,7 @@ def install(prefix: Path, conda: str) -> None:
     run([python, "-c", "import torch; assert torch.version.cuda == '12.4'; "
          "assert torch.ones(2, device='cpu').sum().item() == 2"])
 
-    for name in ("scripts", "envs"):
+    for name in ("scripts", "envs", "docs"):
         shutil.copytree(SOURCE / name, package / name, dirs_exist_ok=True)
     for name in ("README.md", "LICENSE", "CITATION.cff"):
         shutil.copy2(SOURCE / name, package / name)

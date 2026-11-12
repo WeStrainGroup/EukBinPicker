@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import IO, Iterable, Optional, Sequence
 
 
-VERSION = "0.2.1"
+VERSION = "0.3"
 TOOL_NAME = "EukBinPicker"
 CLI_NAME = "eukbinpicker"
 BINNERS = ("remag", "concoct", "metabat2", "vamb")
@@ -1057,27 +1057,32 @@ def binner_parameters(args: argparse.Namespace) -> dict[str, list[str]]:
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    if not args.coverage and not args.bins:
+        raise UserError("provide --coverage, --bins, or both")
+    args.input_mode = "combined" if args.coverage and args.bins else ("binning" if args.coverage else "bins")
+    args.binner_list = parse_choices(args.binners, BINNERS, "binners") if args.coverage else ()
     args.bin_sources = {}
     if args.bins:
-        if args.contigs or args.coverage or any((args.cov_contig_column, args.cov_mean_column, args.cov_variance_column)):
-            raise UserError("--bins does not use --contigs, --coverage or --cov-* options")
-        if args.binners != "all" or args.gpu != "F" or any(
-            getattr(args, name + "_parameters") for name in BINNERS
-        ):
-            raise UserError("--bins skips binning; omit --binners, --gpu T and binner parameters")
-        args.depth, args.bam = [], []
         from import_bins import discover_bin_sets
-        args.bin_sources = discover_bin_sets(args.bins)
-    else:
+        args.bin_sources = discover_bin_sets(args.bins, reserved=args.binner_list)
+    args.source_list = (*args.binner_list, *args.bin_sources)
+    if args.coverage:
         if args.contigs is None:
             raise UserError("--contigs is required with --coverage")
         resolve_coverage_inputs(args)
+    else:
+        if args.contigs or any((args.cov_contig_column, args.cov_mean_column, args.cov_variance_column)):
+            raise UserError("--bins alone does not use --contigs or --cov-* options")
+        if args.binners != "all" or args.gpu != "F" or any(
+            getattr(args, name + "_parameters") for name in BINNERS
+        ):
+            raise UserError("--bins alone skips binning; omit --binners, --gpu T and binner parameters")
+        args.depth, args.bam = [], []
     selectors = (args.cov_contig_column, args.cov_mean_column, args.cov_variance_column)
     if args.bam and any(selectors):
         raise UserError("--cov-* column options apply only to coverage tables, not BAM files")
     if any(selectors) and not (args.cov_contig_column and args.cov_mean_column):
         raise UserError("custom tables require --cov-contig-column and --cov-mean-column together")
-    args.binner_list = tuple(args.bin_sources) if args.bins else parse_choices(args.binners, BINNERS, "binners")
     args.binner_parameters = binner_parameters(args)
     if args.gpu == "T" and not {"remag", "vamb"}.intersection(args.binner_list):
         raise UserError("--gpu T requires remag or vamb in --binners")
@@ -1130,18 +1135,16 @@ def depth_column_options(args):
 def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
     contigs = args.contigs.resolve() if args.contigs else None
     depth_inputs = parse_depth_inputs(args.depth) if args.depth else ()
-    if args.bins:
-        from import_bins import inspect_bin_sets
-        bin_inputs, lengths = inspect_bin_sets(args.bin_sources)
-    else:
-        lengths = fasta_lengths(contigs, allow_empty=True)
+    from import_bins import inspect_bin_sets
+    bin_inputs, imported_lengths = inspect_bin_sets(args.bin_sources)
+    lengths = fasta_lengths(contigs, allow_empty=True) if args.coverage else imported_lengths
     eligible_lengths = OrderedDict(
         (identifier, length)
         for identifier, length in lengths.items()
         if length >= args.min_input_length
     )
     bam_summary = {}
-    if args.bins:
+    if not args.coverage:
         eligible_lengths = lengths
         depth_text = None
         depth_summary = dict(contigs=0, depth_source_count=0, depth_sources=[],
@@ -1211,9 +1214,9 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
         "eligible_bp": sum(eligible_lengths.values()),
         "depth_rows": depth_summary["contigs"],
         "normalized_depth_bytes": len(depth_text.encode("utf-8")) if depth_text is not None else None,
-        "input_mode": "bins" if args.bins else "binning",
+        "input_mode": args.input_mode,
         "bin_inputs": bin_inputs if args.bins else [],
-        "coverage_input": None if args.bins else ("bam" if args.bam else "table"),
+        "coverage_input": ("bam" if args.bam else "table") if args.coverage else None,
         "variance_available": depth_summary["variance_available"],
         "column_options": depth_column_options(args),
         **bam_summary,
@@ -1227,7 +1230,7 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
         "total_avg_depth_policy": depth_summary[
             "total_avg_depth_policy"
         ],
-        "binners": list(args.binner_list),
+        "binners": list(args.source_list),
         "binner_parameters": args.binner_parameters,
         "gpu": args.gpu,
         "qc_tools": list(args.qc_list),
@@ -1301,7 +1304,7 @@ def complete_empty_input_workflow(
         "study": INTERNAL_STUDY,
         "sample": args.sample,
         "minimum_bp_inclusive": args.min_selection_length,
-        "binners": list(args.binner_list),
+        "binners": list(args.source_list),
         "gpu": args.gpu,
         "branch_state": {
             binner: "not_run_empty_input" for binner in args.binner_list
@@ -1363,9 +1366,12 @@ def complete_empty_input_workflow(
         "version": VERSION,
         "sample": args.sample,
         "study": INTERNAL_STUDY,
-        "input_mode": "bins" if args.bins else "binning",
-        "requested_binners": list(args.binner_list),
+        "input_mode": args.input_mode,
+        "requested_binners": list(args.source_list),
+        "requested_native_binners": list(args.binner_list),
+        "imported_sources": list(args.bin_sources),
         "completed_binners": [],
+        "completed_native_binners": [],
         "qc_tools": list(args.qc_list),
         "decision_qc": args.qc_decision,
         "random_seed": args.random_seed,
@@ -1570,8 +1576,11 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
     }
     write_env(backend_env, env_values)
 
-    if args.bins:
-        completed_binners = args.binner_list
+    completed_binners = ()
+    if not args.coverage or int(input_summary["eligible_contigs"]) == 0:
+        if not args.bin_sources:
+            complete_empty_input_workflow(args, out, input_summary, complete)
+            return
     else:
         normalized_depth.parent.mkdir(parents=True, exist_ok=True)
         if args.bam:
@@ -1591,15 +1600,6 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
                 raise UserError(f"existing normalized depth differs: {normalized_depth}")
         else:
             atomic_text(normalized_depth, depth_text)
-
-        if int(input_summary["eligible_contigs"]) == 0:
-            complete_empty_input_workflow(
-                args,
-                out,
-                input_summary,
-                complete,
-            )
-            return
 
         from prepare_inputs import prepare_inputs
 
@@ -1725,9 +1725,12 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
             args.sample,
             args.binner_list,
         )
-        if not completed_binners:
+        if not completed_binners and not args.bin_sources:
             raise UserError("all requested binners failed or produced no valid branch")
+        if not completed_binners:
+            note("all requested binners failed; continuing with imported bin sets")
 
+    completed_sources = (*completed_binners, *args.bin_sources)
 
     # Import the validated Python backends only after input/tool preflight.
     from merge_busco import merge as merge_busco
@@ -1750,7 +1753,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         manifest_index=manifest_index,
         results_root=results_root,
         rank=1,
-        binners=completed_binners,
+        binners=completed_sources,
         seqkit=seqkit_exe,
         threads=args.threads,
         minimum_bp=args.min_selection_length,
@@ -1863,9 +1866,12 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         "version": VERSION,
         "sample": args.sample,
         "study": INTERNAL_STUDY,
-        "input_mode": "bins" if args.bins else "binning",
-        "requested_binners": list(args.binner_list),
-        "completed_binners": list(completed_binners),
+        "input_mode": args.input_mode,
+        "requested_binners": list(args.source_list),
+        "requested_native_binners": list(args.binner_list),
+        "imported_sources": list(args.bin_sources),
+        "completed_binners": list(completed_sources),
+        "completed_native_binners": list(completed_binners),
         "qc_tools": list(args.qc_list),
         "decision_qc": args.qc_decision,
         "random_seed": args.random_seed,
@@ -1978,9 +1984,9 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
         "--contigs",
         type=Path,
         metavar="FASTA",
-        help="input contig FASTA with unique record IDs; required with --coverage, not used with --bins",
+        help="input contig FASTA with unique record IDs; required with --coverage",
     )
-    inputs = required.add_mutually_exclusive_group(required=True)
+    inputs = required
     inputs.add_argument(
         "--coverage",
         action="extend",
@@ -1994,7 +2000,7 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
     inputs.add_argument(
         "--bins", type=Path, nargs="+", action="extend", metavar="DIR",
-        help="existing bin directories from the same assembly; one source per directory; skips binning and coverage",
+        help="existing bin directories from the same assembly; use alone or add to --contigs and --coverage",
     )
     columns = parser.add_argument_group("custom coverage table columns")
     columns.add_argument("--cov-contig-column", metavar="NAME")

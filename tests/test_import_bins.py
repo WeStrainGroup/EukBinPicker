@@ -106,7 +106,7 @@ class ImportBinsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'duplicate identifiers'):
             discover_bin_sets([a])
 
-    def test_rejects_binning_options_and_coverage(self):
+    def test_bins_only_rejects_binning_options_or_coverage_without_contigs(self):
         a = self.bins('custom')
         for options in [('--contigs', str(self.fasta)), ('--coverage', str(self.depth)), ('--gpu', 'T'),
                         ('--binners', 'vamb'), ('--cov-contig-column', 'id')]:

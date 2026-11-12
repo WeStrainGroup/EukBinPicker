@@ -5,7 +5,7 @@ from select_within_sample_representatives import fasta_contigs
 from seqkit_bin_stats import is_fasta, original_bin_id, safe_component, sha256_file
 
 
-def discover_bin_sets(directories: list[Path]) -> dict[str, list[Path]]:
+def discover_bin_sets(directories: list[Path], reserved=()) -> dict[str, list[Path]]:
     sources = {}
     seen = set()
     for directory in directories:
@@ -18,7 +18,7 @@ def discover_bin_sets(directories: list[Path]) -> dict[str, list[Path]]:
         base = safe_component(directory.name)
         label = base
         suffix = 2
-        while label in sources:
+        while label in sources or label in reserved:
             label = f"{base}_{suffix}"
             suffix += 1
         paths = sorted(path for path in directory.iterdir() if is_fasta(path))

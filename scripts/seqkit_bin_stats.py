@@ -375,7 +375,7 @@ def inventory_sample(
     paths_by_binner: dict[str, list[Path]] = {}
     branch_state: dict[str, str] = {}
     for binner in binners:
-        if bin_sources is not None:
+        if bin_sources is not None and binner in bin_sources:
             paths_by_binner[binner] = bin_sources[binner]
             branch_state[binner] = "imported"
             continue
