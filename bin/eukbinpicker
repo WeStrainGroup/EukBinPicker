@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import IO, Iterable, Optional, Sequence
 
 
-VERSION = "0.1"
+VERSION = "0.2"
 TOOL_NAME = "EukBinPicker"
 CLI_NAME = "eukbinpicker"
 BINNERS = ("remag", "concoct", "metabat2", "vamb")
@@ -1057,13 +1057,25 @@ def binner_parameters(args: argparse.Namespace) -> dict[str, list[str]]:
 
 
 def validate_args(args: argparse.Namespace) -> None:
-    resolve_coverage_inputs(args)
+    args.bin_sources = {}
+    if args.bins:
+        if args.coverage or any((args.cov_contig_column, args.cov_mean_column, args.cov_variance_column)):
+            raise UserError("--bins cannot be combined with coverage or --cov-* options")
+        if args.binners != "all" or args.gpu != "F" or any(
+            getattr(args, name + "_parameters") for name in BINNERS
+        ):
+            raise UserError("--bins skips binning; omit --binners, --gpu T and binner parameters")
+        args.depth, args.bam = [], []
+        from import_bins import discover_bin_sets
+        args.bin_sources = discover_bin_sets(args.bins)
+    else:
+        resolve_coverage_inputs(args)
     selectors = (args.cov_contig_column, args.cov_mean_column, args.cov_variance_column)
     if args.bam and any(selectors):
         raise UserError("--cov-* column options apply only to coverage tables, not BAM files")
     if any(selectors) and not (args.cov_contig_column and args.cov_mean_column):
         raise UserError("custom tables require --cov-contig-column and --cov-mean-column together")
-    args.binner_list = parse_choices(args.binners, BINNERS, "binners")
+    args.binner_list = tuple(args.bin_sources) if args.bins else parse_choices(args.binners, BINNERS, "binners")
     args.binner_parameters = binner_parameters(args)
     if args.gpu == "T" and not {"remag", "vamb"}.intersection(args.binner_list):
         raise UserError("--gpu T requires remag or vamb in --binners")
@@ -1123,7 +1135,16 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
         if length >= args.min_input_length
     )
     bam_summary = {}
-    if args.bam:
+    if args.bins:
+        from import_bins import validate_bin_sets
+        bin_inputs = validate_bin_sets(args.bin_sources, contigs)
+        eligible_lengths = lengths
+        depth_text = None
+        depth_summary = dict(contigs=0, depth_source_count=0, depth_sources=[],
+                             coverage_source_columns=[], coverage_columns=[],
+                             coverage_column_count=0, variance_available=[],
+                             total_avg_depth_policy=None)
+    elif args.bam:
         bam_summary = validate_bams(args.bam, lengths, open_text(contigs),
                                     environment_value("METABAT2_ENV"),
                                     environment_value("CONDA_EXE") or "conda")
@@ -1186,7 +1207,9 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
         "eligible_bp": sum(eligible_lengths.values()),
         "depth_rows": depth_summary["contigs"],
         "normalized_depth_bytes": len(depth_text.encode("utf-8")) if depth_text is not None else None,
-        "coverage_input": "bam" if args.bam else "table",
+        "input_mode": "bins" if args.bins else "binning",
+        "bin_inputs": bin_inputs if args.bins else [],
+        "coverage_input": None if args.bins else ("bam" if args.bam else "table"),
         "variance_available": depth_summary["variance_available"],
         "column_options": depth_column_options(args),
         **bam_summary,
@@ -1336,6 +1359,7 @@ def complete_empty_input_workflow(
         "version": VERSION,
         "sample": args.sample,
         "study": INTERNAL_STUDY,
+        "input_mode": "bins" if args.bins else "binning",
         "requested_binners": list(args.binner_list),
         "completed_binners": [],
         "qc_tools": list(args.qc_list),
@@ -1506,54 +1530,8 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
     results_root = out / "0_log/work/results"
     preflight = results_root / INTERNAL_STUDY / args.sample / "preflight"
     normalized_depth = work / "input" / "depth.jgi.tsv"
-    normalized_depth.parent.mkdir(parents=True, exist_ok=True)
-    if args.bam:
-        bam_paths = [Path(item["path"]) for item in input_summary["bam_inputs"]]
-        bam_list = config_dir / "bams.txt"
-        atomic_text(bam_list, "".join(str(path) + "\n" for path in bam_paths))
-        bam_depth = normalized_depth.parent / "bam.depth.tsv"
-        calculate_depth(bam_paths, bam_depth, args.threads,
-                        environment_value("METABAT2_ENV"), environment_value("CONDA_EXE") or "conda")
-        depth_inputs = (DepthInput(bam_depth),)
-    depth_text, _ = normalized_depth_inputs(
-        depth_inputs, fasta_lengths(args.contigs.resolve(), allow_empty=True), args.sample,
-        **({} if args.bam else depth_column_options(args)),
-    )
-    if normalized_depth.exists():
-        if normalized_depth.read_text(encoding="utf-8") != depth_text:
-            raise UserError(f"existing normalized depth differs: {normalized_depth}")
-    else:
-        atomic_text(normalized_depth, depth_text)
-
     manifest = out / "0_log/work/manifest.tsv"
     make_manifest(manifest, INTERNAL_STUDY, args.sample, normalized_depth)
-    if int(input_summary["eligible_contigs"]) == 0:
-        complete_empty_input_workflow(
-            args,
-            out,
-            input_summary,
-            complete,
-        )
-        return
-
-    from prepare_inputs import prepare_inputs
-
-    prepare_inputs(
-        euk_fasta=args.contigs.resolve(),
-        unknown_fasta=None,
-        depth_tsv=normalized_depth,
-        sample=args.sample,
-        out_dir=preflight,
-        minimum_length_inclusive=args.min_input_length,
-    )
-
-    # Accept only statuses produced by this invocation after branch validation.
-    for status in (
-        results_root / INTERNAL_STUDY / args.sample / "branch_status.tsv",
-        out / "0_log/work/status/binner/r000001.status.tsv",
-    ):
-        status.unlink(missing_ok=True)
-
     python = sys.executable
     classic = tuple(
         item for item in args.binner_list if item in {"remag", "concoct", "metabat2"}
@@ -1588,114 +1566,164 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
     }
     write_env(backend_env, env_values)
 
-    if classic:
-        rc = run_logged(
-            ["bash", str(SCRIPTS / "run_binning_pilot.sh"), str(backend_env)],
-            logs / "binning.classic.log",
-            environment=workflow_environment,
+    if args.bins:
+        completed_binners = args.binner_list
+    else:
+        normalized_depth.parent.mkdir(parents=True, exist_ok=True)
+        if args.bam:
+            bam_paths = [Path(item["path"]) for item in input_summary["bam_inputs"]]
+            bam_list = config_dir / "bams.txt"
+            atomic_text(bam_list, "".join(str(path) + "\n" for path in bam_paths))
+            bam_depth = normalized_depth.parent / "bam.depth.tsv"
+            calculate_depth(bam_paths, bam_depth, args.threads,
+                            environment_value("METABAT2_ENV"), environment_value("CONDA_EXE") or "conda")
+            depth_inputs = (DepthInput(bam_depth),)
+        depth_text, _ = normalized_depth_inputs(
+            depth_inputs, fasta_lengths(args.contigs.resolve(), allow_empty=True), args.sample,
+            **({} if args.bam else depth_column_options(args)),
         )
-        completed_classic = successful_binners(
-            results_root,
-            INTERNAL_STUDY,
-            args.sample,
-            classic,
+        if normalized_depth.exists():
+            if normalized_depth.read_text(encoding="utf-8") != depth_text:
+                raise UserError(f"existing normalized depth differs: {normalized_depth}")
+        else:
+            atomic_text(normalized_depth, depth_text)
+
+        if int(input_summary["eligible_contigs"]) == 0:
+            complete_empty_input_workflow(
+                args,
+                out,
+                input_summary,
+                complete,
+            )
+            return
+
+        from prepare_inputs import prepare_inputs
+
+        prepare_inputs(
+            euk_fasta=args.contigs.resolve(),
+            unknown_fasta=None,
+            depth_tsv=normalized_depth,
+            sample=args.sample,
+            out_dir=preflight,
+            minimum_length_inclusive=args.min_input_length,
         )
-        if rc != 0:
-            note(
-                "one or more classic binners failed; continuing with "
-                f"available branches: {completed_classic}"
-            )
 
-    try:
-        if "vamb" in args.binner_list:
-            prepare_vamb_input(
-                preflight,
-                out / "0_log/work/inputs" / "r000001",
-                INTERNAL_STUDY,
-                args.sample,
-            )
-            vamb = executable("vamb", "VAMB")
-            version_probe = subprocess.run(
-                [vamb, "--version"],
-                check=False,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                env=workflow_environment,
-            )
-            vamb_identity = (
-                version_probe.stdout.strip().splitlines()[0]
-                if version_probe.stdout.strip()
-                else f"vamb executable {vamb}"
-            )
-            history = config_dir / "vamb.environment.txt"
-            atomic_text(history, vamb_identity + "\n")
-            env_values.update(
-                {
-                    "INPUTS_ROOT": out / "0_log/work/inputs",
-                    "OUT_ROOT": results_root,
-                    "ADDON_ROOT": out / "0_log/work/vamb",
-                    "ADDON_STATUS_ROOT": out / "0_log/work/status",
-                    "VAMB_EXE": vamb,
-                    "VAMB_TOOL_IDENTITY": vamb_identity,
-                    "VAMB_ENV_HISTORY": history,
-                    "VAMB_MIN_CONTIG_INCLUSIVE": args.min_input_length,
-                    "VAMB_MIN_FASTA_BP": max(1, args.min_retain_length),
-                }
-            )
-            write_env(backend_env, env_values)
+        # Accept only statuses produced by this invocation after branch validation.
+        for status in (
+            results_root / INTERNAL_STUDY / args.sample / "branch_status.tsv",
+            out / "0_log/work/status/binner/r000001.status.tsv",
+        ):
+            status.unlink(missing_ok=True)
 
-            process_env = dict(workflow_environment)
-            process_env["SLURM_ARRAY_TASK_ID"] = "1"
-            socket_runtime_value = environment_value("VAMB_SOCKET_DIR")
-            if socket_runtime_value:
-                socket_runtime = Path(socket_runtime_value).resolve()
-                if (
-                    not socket_runtime.is_dir()
-                    or socket_runtime.parent != Path("/dev/shm")
-                    or not socket_runtime.name.startswith(
-                        "eukbin-"
-                    )
-                    or socket_runtime.stat().st_uid != os.getuid()
-                    or len(str(socket_runtime)) >= 80
-                ):
-                    raise UserError(
-                        "EUKBINPICKER_VAMB_SOCKET_DIR must be a short, owned "
-                        "/dev/shm/eukbin-* directory"
-                    )
-                for name in ("TMPDIR", "TMP", "TEMP"):
-                    process_env[name] = str(socket_runtime)
+        if classic:
             rc = run_logged(
-                [
-                    "bash",
-                    str(SCRIPTS / "run_vamb.sh"),
-                    str(backend_env),
-                ],
-                logs / "binning.vamb.log",
-                environment=process_env,
+                ["bash", str(SCRIPTS / "run_binning_pilot.sh"), str(backend_env)],
+                logs / "binning.classic.log",
+                environment=workflow_environment,
             )
-            completed_vamb = successful_binners(
+            completed_classic = successful_binners(
                 results_root,
                 INTERNAL_STUDY,
                 args.sample,
-                ("vamb",),
+                classic,
             )
             if rc != 0:
                 note(
-                    "VAMB failed; continuing with "
-                    f"available branches: {completed_vamb}"
+                    "one or more classic binners failed; continuing with "
+                    f"available branches: {completed_classic}"
                 )
-    except (UserError, OSError, ValueError) as error:
-        note(f"VAMB branch failed: {error}; retaining successful binners")
 
-    completed_binners = successful_binners(
-        results_root,
-        INTERNAL_STUDY,
-        args.sample,
-        args.binner_list,
-    )
-    if not completed_binners:
-        raise UserError("all requested binners failed or produced no valid branch")
+        try:
+            if "vamb" in args.binner_list:
+                prepare_vamb_input(
+                    preflight,
+                    out / "0_log/work/inputs" / "r000001",
+                    INTERNAL_STUDY,
+                    args.sample,
+                )
+                vamb = executable("vamb", "VAMB")
+                version_probe = subprocess.run(
+                    [vamb, "--version"],
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    env=workflow_environment,
+                )
+                vamb_identity = (
+                    version_probe.stdout.strip().splitlines()[0]
+                    if version_probe.stdout.strip()
+                    else f"vamb executable {vamb}"
+                )
+                history = config_dir / "vamb.environment.txt"
+                atomic_text(history, vamb_identity + "\n")
+                env_values.update(
+                    {
+                        "INPUTS_ROOT": out / "0_log/work/inputs",
+                        "OUT_ROOT": results_root,
+                        "ADDON_ROOT": out / "0_log/work/vamb",
+                        "ADDON_STATUS_ROOT": out / "0_log/work/status",
+                        "VAMB_EXE": vamb,
+                        "VAMB_TOOL_IDENTITY": vamb_identity,
+                        "VAMB_ENV_HISTORY": history,
+                        "VAMB_MIN_CONTIG_INCLUSIVE": args.min_input_length,
+                        "VAMB_MIN_FASTA_BP": max(1, args.min_retain_length),
+                    }
+                )
+                write_env(backend_env, env_values)
+
+                process_env = dict(workflow_environment)
+                process_env["SLURM_ARRAY_TASK_ID"] = "1"
+                socket_runtime_value = environment_value("VAMB_SOCKET_DIR")
+                if socket_runtime_value:
+                    socket_runtime = Path(socket_runtime_value).resolve()
+                    if (
+                        not socket_runtime.is_dir()
+                        or socket_runtime.parent != Path("/dev/shm")
+                        or not socket_runtime.name.startswith(
+                            "eukbin-"
+                        )
+                        or socket_runtime.stat().st_uid != os.getuid()
+                        or len(str(socket_runtime)) >= 80
+                    ):
+                        raise UserError(
+                            "EUKBINPICKER_VAMB_SOCKET_DIR must be a short, owned "
+                            "/dev/shm/eukbin-* directory"
+                        )
+                    for name in ("TMPDIR", "TMP", "TEMP"):
+                        process_env[name] = str(socket_runtime)
+                rc = run_logged(
+                    [
+                        "bash",
+                        str(SCRIPTS / "run_vamb.sh"),
+                        str(backend_env),
+                    ],
+                    logs / "binning.vamb.log",
+                    environment=process_env,
+                )
+                completed_vamb = successful_binners(
+                    results_root,
+                    INTERNAL_STUDY,
+                    args.sample,
+                    ("vamb",),
+                )
+                if rc != 0:
+                    note(
+                        "VAMB failed; continuing with "
+                        f"available branches: {completed_vamb}"
+                    )
+        except (UserError, OSError, ValueError) as error:
+            note(f"VAMB branch failed: {error}; retaining successful binners")
+
+        completed_binners = successful_binners(
+            results_root,
+            INTERNAL_STUDY,
+            args.sample,
+            args.binner_list,
+        )
+        if not completed_binners:
+            raise UserError("all requested binners failed or produced no valid branch")
+
 
     # Import the validated Python backends only after input/tool preflight.
     from merge_busco import merge as merge_busco
@@ -1728,6 +1756,8 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         temporary_root=runtime_directories["TMPDIR"],
         fail_on_seqkit_error=True,
         raw_output=out / "1_raw",
+        bin_sources=args.bin_sources if args.bins else None,
+        retain_minimum_bp=args.min_retain_length,
     )
     _, candidate_rows = read_tsv(candidates)
 
@@ -1829,6 +1859,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
         "version": VERSION,
         "sample": args.sample,
         "study": INTERNAL_STUDY,
+        "input_mode": "bins" if args.bins else "binning",
         "requested_binners": list(args.binner_list),
         "completed_binners": list(completed_binners),
         "qc_tools": list(args.qc_list),
@@ -1946,9 +1977,9 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="FASTA",
         help="input contig FASTA with unique record IDs",
     )
-    required.add_argument(
+    inputs = required.add_mutually_exclusive_group(required=True)
+    inputs.add_argument(
         "--coverage",
-        required=True,
         action="extend",
         nargs="+",
         metavar="FILE",
@@ -1957,6 +1988,10 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
             "full-assembly inputs are matched to the supplied FASTA; "
             "accepts multiple files and repeated --coverage; do not mix formats"
         ),
+    )
+    inputs.add_argument(
+        "--bins", type=Path, nargs="+", action="extend", metavar="DIR",
+        help="existing bin directories from the same assembly; one source per directory; skips binning and coverage",
     )
     columns = parser.add_argument_group("custom coverage table columns")
     columns.add_argument("--cov-contig-column", metavar="NAME")
@@ -2063,7 +2098,7 @@ def build_parser() -> argparse.ArgumentParser:
         add_help=False,
         description=(
             "Mine quality-controlled, non-redundant eukaryotic bins from "
-            "contigs with coverage tables or indexed BAM files."
+            "contigs with coverage tables/BAMs, or existing bin sets."
         ),
     )
     parser.add_argument("--help", action="help", help="show this help message and exit")

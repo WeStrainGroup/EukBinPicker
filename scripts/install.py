@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.1"
+VERSION = "0.2"
 SOURCE = Path(__file__).resolve().parents[1]
 
 
@@ -92,6 +92,7 @@ def install(prefix: Path, conda: str) -> None:
     # Launch every executable in its own environment, including BAM helpers.
     probes = {
         "concoct": [["concoct", "--version"], ["samtools", "--version"],
+                    ["cut_up_fasta.py", "--help"],
                     ["concoct_coverage_table.py", "--help"]],
         "metabat2": [["metabat2", "--help"], ["samtools", "--version"],
                      ["jgi_summarize_bam_contig_depths", "--help"]],
@@ -101,7 +102,8 @@ def install(prefix: Path, conda: str) -> None:
     for tool, commands in probes.items():
         for command in commands:
             result = subprocess.run([conda, "run", "--no-capture-output", "-p",
-                environments[tool.upper() + "_ENV"], *command], capture_output=True, text=True)
+                environments[tool.upper() + "_ENV"], *command], capture_output=True, text=True,
+                cwd=logs)
             (logs / (command[0] + "-" + tool + ".txt")).write_text(result.stdout + result.stderr)
             # MetaBAT help exits 1 in some builds; missing libraries must still fail.
             valid_help = command[0] in {"metabat2", "jgi_summarize_bam_contig_depths"}

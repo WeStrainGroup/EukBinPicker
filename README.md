@@ -2,13 +2,13 @@
 
 **Recover eukaryotic genome bins with complementary binning methods.**
 
-Version **0.1** · [GitHub](https://github.com/WeStrainGroup/EukBinPicker)
+Version **0.2** · [GitHub](https://github.com/WeStrainGroup/EukBinPicker)
 
 ## Introduction
 
-While challenging, genome-resolved metagenomics helps reveal the taxonomic and functional diversity of environmental eukaryotes and their ecological roles. Different binning methods can recover different genomes from the same sample. Following the complementary-binner rationale of [DAS Tool](https://github.com/cmks/DAS_Tool), EukBinPicker (EBP) evaluates multiple candidate sets to select representative eukaryotic bins.
+While challenging, genome-resolved metagenomics helps reveal the taxonomic diversity and functional roles of environmental eukaryotes. The performance of existing binning algorithms varies across samples and environments. Following the complementary-binner rationale of [DAS Tool](https://github.com/cmks/DAS_Tool), EukBinPicker (EBP) evaluates multiple candidate sets from different binners to select representative eukaryotic bins.
 
-EBP combines [REMAG](https://github.com/danielzmbp/remag), [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://bitbucket.org/berkeleylab/metabat/) and [VAMB](https://github.com/RasmussenLab/vamb). These methods use contig sequences and coverage without requiring additional info like prokaryotic marker genes or taxonomy for binning and offer complementary approaches: contrastive learning, Gaussian mixture models, graph clustering and variational autoencoders.
+EBP combines [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://bitbucket.org/berkeleylab/metabat/), [VAMB](https://github.com/RasmussenLab/vamb) and [REMAG](https://github.com/danielzmbp/remag), listed in publication order. These methods use contig sequences and coverage without requiring prokaryotic marker genes or taxonomic assignments for binning. They offer complementary approaches: Gaussian mixture models, graph clustering, variational autoencoders and contrastive learning.
 
 A typical workflow is to assemble quality-controlled reads, map reads to the complete assembly, and identify eukaryotic contigs with [EukContigMiner](https://github.com/WeStrainGroup/EukContigMiner) or other similar tools. Supply the resulting eukaryotic FASTA and related coverage table or BAM files to EBP. Coverage may come from the source sample alone or from multiple samples mapped to that assembly.
 
@@ -27,17 +27,17 @@ Eukaryotic contigs + Coverage tables or BAMs
 
 ## Installation
 
-Install on **Linux x86-64** from the [WeStrainGroup Conda channel](https://anaconda.org/westraingroup/eukbinpicker):
+Install via Conda on Linux x86-64:
 
 ```bash
-conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.1
+conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.2
 conda activate eukbinpicker
 ```
 
 Alternatively, install directly from GitHub with Conda and curl available:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/WeStrainGroup/EukBinPicker/v0.1/install.sh | bash -s -- --prefix "$HOME/conda-envs/eukbinpicker"
+curl -fsSL https://raw.githubusercontent.com/WeStrainGroup/EukBinPicker/v0.2/install.sh | bash -s -- --prefix "$HOME/conda-envs/eukbinpicker"
 conda activate "$HOME/conda-envs/eukbinpicker"
 ```
 
@@ -57,6 +57,25 @@ eukbinpicker \
 ```
 
 By default, EBP runs all four binners on CPU with 4 threads, retains contigs ≥1,500 bp, and assesses bins ≥500,000 bp with EukCC. Selected FASTA files are written to `sample_1_ebp/3_selection/bins/`.
+
+## Existing bin sets
+
+If bins are already available, supply one directory per tool or source:
+
+```bash
+eukbinpicker \
+  --sample sample_1 \
+  --contigs assembly.fa \
+  --bins /path/to/concoct_bins /path/to/metabat2_bins /path/to/other_bins \
+  --eukcc-db /path/to/eukcc_db \
+  --output sample_1_selection
+```
+
+`--bins` accepts multiple directories or repeated arguments. Each directory must directly contain bin FASTA files (`.fa`, `.fna`, `.fasta`, optionally `.gz`); subdirectories are not searched. Any source is accepted, including tools outside the four bundled binners. Directory names identify sources; repeated names receive numeric suffixes. Original paths and checksums are recorded in `0_log/run.json`.
+
+All bins must come from the supplied assembly. EBP checks every contig ID and sequence, allowing letter case and reverse-complement differences. Use the complete assembly FASTA if your existing bins contain contigs outside the eukaryotic subset. This mode does not classify contigs or establish that every bin is eukaryotic.
+
+Coverage and binning are skipped. Do not combine `--bins` with `--coverage`, coverage-column selectors or binner options. `--min-input-length` applies only when running binners; imported bins remain intact. Retention, QC and selection thresholds still apply. Retained bins are copied into `1_raw/` (gzip files are decompressed); source files are never modified. Different directories are compared as separate sources, while bins within one directory are not deduplicated against each other.
 
 ## Coverage input
 
@@ -115,8 +134,9 @@ The installer includes SAMtools and `jgi_summarize_bam_contig_depths`. JGI produ
 | Parameter | Default | Description |
 | --- | --- | --- |
 | `--sample` | Required | Assembly/sample label: letters, digits, `.`, `_` or `-`. |
-| `--contigs` | Required | Eukaryotic contig FASTA with unique IDs. |
-| `--coverage` | Required | One or more coverage tables or indexed BAMs; repeatable. |
+| `--contigs` | Required | Eukaryotic contig FASTA for binning, or matching assembly FASTA for existing bins; unique IDs. |
+| `--coverage` | Either coverage or bins | One or more coverage tables or indexed BAMs; repeatable. |
+| `--bins` | Either coverage or bins | Existing bin directories from the same assembly; repeatable. Skips binning. |
 | `--cov-contig-column` | Auto | Contig ID column name in custom tables. |
 | `--cov-mean-column` | Auto | Mean-coverage column names in custom tables, comma-separated. |
 | `--cov-variance-column` | Auto | Coverage-variance column names in custom tables, comma-separated and paired with means. |
@@ -171,7 +191,7 @@ To rank with BUSCO, include it in `--qc-tools` and set `--qc-decision busco`. BU
 
 | Parameter | Default | Description |
 | --- | --- | --- |
-| `--min-input-length` | `1500` | Minimum input contig length, in bp. |
+| `--min-input-length` | `1500` | Minimum contig length for binning, in bp; does not trim imported bins. |
 | `--min-retain-length` | `0` | Additional bin-retention minimum, in bp; 0 disables it. |
 | `--min-selection-length` | `500000` | Minimum bin length entering QC and selection, in bp. |
 | `--min-selection-completeness` | `0` | Minimum completeness, in %. |
@@ -202,14 +222,14 @@ EBP visits candidates in descending quality order. A candidate is excluded if it
 overlap(A, B) = shared_contig_bp / min(length(A), length(B))
 ```
 
-The default cutoff is 0.50. This selects the highest-ranked representative among competing cross-binner candidates within the assembly. Shared contigs must match in original ID and normalized sequence; overlap is a proxy for competing genome reconstructions, not a taxonomic identity test. Bins from the same binner are not compared. EBP preserves complete candidate bins without merging, splitting or refinement.
+The default cutoff is 0.50. This selects the highest-ranked representative among competing cross-binner candidates within the assembly. Shared contigs must match in original ID and normalized sequence; overlap is a proxy for competing genome reconstructions, not a taxonomic identity test. Bins from the same binner (or the same imported directory) are not compared. EBP preserves complete candidate bins without merging, splitting or refinement.
 
 ## Outputs
 
 | Path | Contents |
 | --- | --- |
 | `0_log/` | `run.json`, `summary.json`, readable logs and internal work records. |
-| `1_raw/<binner>/` | Original bin FASTA files passing the retention threshold, grouped by binner. |
+| `1_raw/<binner>/` | Original bin FASTA files passing the retention threshold, grouped by binner or imported source. |
 | `2_qc/eukcc/`, `2_qc/busco/` | Results from each requested QC tool. |
 | `2_qc/summary.tsv` | One row per assessed bin: originating binner, SeqKit statistics and all requested QC metrics. |
 | `3_selection/representatives.tsv` | One row per selected representative: selection reason, SeqKit and QC statistics, shared-contig statistics and represented bins. |

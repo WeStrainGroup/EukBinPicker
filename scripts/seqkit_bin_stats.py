@@ -365,6 +365,8 @@ def inventory_sample(
     require_complete_branches: bool = False,
     fail_on_seqkit_error: bool = False,
     raw_output: Optional[Path] = None,
+    bin_sources: Optional[dict[str, list[Path]]] = None,
+    retain_minimum_bp: int = 0,
 ) -> None:
     sample_row = read_manifest_rank(manifest, manifest_index, rank)
     study = sample_row["study"]
@@ -373,6 +375,10 @@ def inventory_sample(
     paths_by_binner: dict[str, list[Path]] = {}
     branch_state: dict[str, str] = {}
     for binner in binners:
+        if bin_sources is not None:
+            paths_by_binner[binner] = bin_sources[binner]
+            branch_state[binner] = "imported"
+            continue
         branch = (
             results_root
             / study
@@ -467,18 +473,35 @@ def inventory_sample(
                     "seqkit_error": "",
                 }
             )
-            if raw_output is not None:
+            if raw_output is not None and bp >= retain_minimum_bp:
                 target = raw_output / binner / path.name
+                compressed_import = bin_sources is not None and path.name.lower().endswith(".gz")
+                if compressed_import:
+                    target = target.with_suffix("")
                 target.parent.mkdir(parents=True, exist_ok=True)
+                expected_sha = sha256_file(path)
+                if compressed_import:
+                    digest = hashlib.sha256()
+                    with gzip.open(path, "rb") as handle:
+                        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                    expected_sha = digest.hexdigest()
                 if target.exists():
-                    if sha256_file(target) != sha256_file(path):
+                    if sha256_file(target) != expected_sha:
                         raise ValueError(f"retained bin changed: {target}")
                 else:
-                    try:
-                        os.link(path, target)
-                    except OSError:
+                    if compressed_import:
+                        with gzip.open(path, "rb") as source, target.open("wb") as destination:
+                            shutil.copyfileobj(source, destination)
+                    elif bin_sources is not None:
                         shutil.copy2(path, target)
+                    else:
+                        try:
+                            os.link(path, target)
+                        except OSError:
+                            shutil.copy2(path, target)
                 row["bin_path"] = str(target.resolve())
+                row["sha256"] = expected_sha
                 row["materialization"] = "retained"
             by_binner[binner]["stats_ok"] += 1
             by_binner[binner]["raw_bp"] += bp

@@ -16,6 +16,7 @@ CLI = PROJECT / "bin" / "eukbinpicker"
 
 MOCK_TOOL = r"""#!/usr/bin/env python3
 import csv
+import gzip
 import json
 import os
 import sys
@@ -34,7 +35,10 @@ def records(path):
     observed = []
     identifier = None
     sequence = []
-    for raw in Path(path).read_text(encoding="utf-8").splitlines():
+    opener = gzip.open if str(path).endswith('.gz') else open
+    with opener(path, 'rt') as handle:
+        lines = handle.read().splitlines()
+    for raw in lines:
         if raw.startswith(">"):
             if identifier is not None:
                 observed.append((identifier, "".join(sequence)))
@@ -217,6 +221,7 @@ elif name == "busco":
     if "--version" in args:
         print("BUSCO 6")
     else:
+        Path("busco_cwd_marker.log").write_text("native BUSCO starts a log in cwd\n")
         out = Path(value("--out_path"))
         bin_id = value("--out")
         out.mkdir(parents=True, exist_ok=True)

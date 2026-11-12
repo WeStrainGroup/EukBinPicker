@@ -72,7 +72,8 @@ if [[ -n "$BUSCO_ENV" ]]; then
         "${command[@]}"
     )
 fi
-"${command[@]}" \
+# BUSCO creates its initial log in cwd, even before processing arguments.
+(cd "$stage" && "${command[@]}" \
     --in "$bin_path" \
     --out "$bin_id" \
     --out_path "$stage" \
@@ -80,7 +81,7 @@ fi
     --lineage_dataset "$BUSCO_DB" \
     --cpu "$THREADS" \
     --offline \
-    --tar
+    --tar)
 rc=$?
 set -e
 if ((rc != 0)); then
