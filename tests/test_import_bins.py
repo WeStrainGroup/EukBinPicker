@@ -7,7 +7,7 @@ import unittest
 
 import test_mock_end_to_end as mocks
 from test_multi_coverage import MODULE as cli
-from import_bins import discover_bin_sets, validate_bin_sets
+from import_bins import discover_bin_sets, inspect_bin_sets
 
 
 class ImportBinsTests(unittest.TestCase):
@@ -22,7 +22,7 @@ class ImportBinsTests(unittest.TestCase):
         return directory
 
     def arguments(self, *sources):
-        return ['--sample', 'sample1', '--contigs', str(self.fasta),
+        return ['--sample', 'sample1',
                 '--bins', *map(str, sources), '--eukcc-db', str(self.eukcc_db),
                 '--min-selection-length', '1', '--output', str(self.root / 'out')]
 
@@ -32,6 +32,8 @@ class ImportBinsTests(unittest.TestCase):
         # must survive the default 1500 bp threshold unchanged in import mode.
         for name in ('remag', 'metabat2', 'concoct', 'vamb'):
             (self.tools / name).unlink()
+        original = self.fasta.read_text()
+        self.fasta.unlink()
         args = self.arguments(a, b)
         result = self.run_cli(*args)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -43,6 +45,10 @@ class ImportBinsTests(unittest.TestCase):
         self.assertEqual(summary['alternatives'], 1)
         self.assertEqual((out / '1_raw/custom/one.fa').read_bytes(), (a / 'one.fa').read_bytes())
         self.assertFalse((out / '0_log/work/input/depth.jgi.tsv').exists())
+        metadata = json.loads((out / '0_log/run.json').read_text())
+        self.assertIsNone(metadata['contigs_path'])
+        self.assertIsNone(metadata['contigs_sha256'])
+        self.assertEqual(metadata['contigs'], 3)
         with (out / '3_selection/representatives.tsv').open() as handle:
             rows = list(csv.DictReader(handle, delimiter='\t'))
         self.assertEqual(rows[0]['binner'], 'metabat2')
@@ -50,7 +56,7 @@ class ImportBinsTests(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertIn('already complete', again.stderr)
         (a / 'one.fa').write_text('>c1\n'+'ACGT'*25+'\n')
-        self.assertEqual(len((out / '1_raw/custom/one.fa').read_text()), len(self.fasta.read_text()))
+        self.assertEqual(len((out / '1_raw/custom/one.fa').read_text()), len(original))
         changed = self.run_cli(*args)
         self.assertNotEqual(changed.returncode, 0)
         self.assertIn('differ', changed.stderr)
@@ -68,9 +74,15 @@ class ImportBinsTests(unittest.TestCase):
         self.assertEqual(summary['qc_candidates'], 0)
         self.assertEqual(summary['representatives'], 0)
 
-    def test_rejects_wrong_assembly_or_duplicate_record(self):
-        for text, error in [('>foreign\nACGT\n', 'absent'), ('>c1\nAAAA\n', 'differs'),
-                            ('>c1\nACGT\n>c1\nACGT\n', 'duplicate'), ('', 'no FASTA')]:
+    def test_coverage_mode_still_requires_contigs(self):
+        result = self.run_cli('--sample', 'sample1', '--coverage', str(self.depth),
+                              '--output', str(self.root / 'out'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('--contigs is required with --coverage', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+
+    def test_rejects_malformed_fasta(self):
+        for text, error in [('>c1\nACGT\n>c1\nACGT\n', 'duplicate'), ('', 'no FASTA')]:
             with self.subTest(error=error):
                 a = self.root / 'bad'
                 a.mkdir(exist_ok=True)
@@ -87,7 +99,7 @@ class ImportBinsTests(unittest.TestCase):
         (b / 'one.fa').unlink()
         with gzip.open(b / 'one.fna.gz', 'wt') as handle:
             handle.write(self.fasta.read_text())
-        self.assertEqual(len(validate_bin_sets(discover_bin_sets([a, b]), self.fasta)), 2)
+        self.assertEqual(len(inspect_bin_sets(discover_bin_sets([a, b]))[0]), 2)
         with self.assertRaisesRegex(ValueError, 'duplicate bin directory'):
             discover_bin_sets([a, a])
         (a / 'one.fasta').write_text(self.fasta.read_text())
@@ -96,7 +108,7 @@ class ImportBinsTests(unittest.TestCase):
 
     def test_rejects_binning_options_and_coverage(self):
         a = self.bins('custom')
-        for options in [('--coverage', str(self.depth)), ('--gpu', 'T'),
+        for options in [('--contigs', str(self.fasta)), ('--coverage', str(self.depth)), ('--gpu', 'T'),
                         ('--binners', 'vamb'), ('--cov-contig-column', 'id')]:
             with self.subTest(options=options):
                 result = self.run_cli(*self.arguments(a), *options)

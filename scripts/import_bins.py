@@ -33,18 +33,14 @@ def discover_bin_sets(directories: list[Path]) -> dict[str, list[Path]]:
     return sources
 
 
-def validate_bin_sets(sources: dict[str, list[Path]], assembly: Path) -> list[dict]:
-    reference = fasta_contigs(assembly)
-    reference_ids = {key[0] for key in reference}
+def inspect_bin_sets(sources: dict[str, list[Path]]) -> tuple[list[dict], dict]:
+    """Trust source assembly provenance; parse FASTA and inventory unique contigs."""
     inputs = []
+    contigs = {}
     for source, paths in sources.items():
         for path in paths:
             records = fasta_contigs(path)
-            for key in records:
-                if key[0] not in reference_ids:
-                    raise ValueError(f"{path}: contig {key[0]!r} is absent from --contigs")
-                if key not in reference:
-                    raise ValueError(f"{path}: sequence differs from --contigs for {key[0]!r}")
+            contigs.update(records)
             inputs.append(dict(source=source, path=str(path), sha256=sha256_file(path),
                                contigs=len(records), bp=sum(records.values())))
-    return inputs
+    return inputs, contigs

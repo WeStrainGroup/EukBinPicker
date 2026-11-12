@@ -2,7 +2,7 @@
 
 **Recover eukaryotic genome bins with complementary binning methods.**
 
-Version **0.2** · [GitHub](https://github.com/WeStrainGroup/EukBinPicker)
+Version **0.2.1** · [GitHub](https://github.com/WeStrainGroup/EukBinPicker)
 
 ## Introduction
 
@@ -30,14 +30,14 @@ Eukaryotic contigs + Coverage tables or BAMs
 Install via Conda on Linux x86-64:
 
 ```bash
-conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.2
+conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.2.1
 conda activate eukbinpicker
 ```
 
 Alternatively, install directly from GitHub with Conda and curl available:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/WeStrainGroup/EukBinPicker/v0.2/install.sh | bash -s -- --prefix "$HOME/conda-envs/eukbinpicker"
+curl -fsSL https://raw.githubusercontent.com/WeStrainGroup/EukBinPicker/v0.2.1/install.sh | bash -s -- --prefix "$HOME/conda-envs/eukbinpicker"
 conda activate "$HOME/conda-envs/eukbinpicker"
 ```
 
@@ -65,7 +65,6 @@ If bins are already available, supply one directory per tool or source:
 ```bash
 eukbinpicker \
   --sample sample_1 \
-  --contigs assembly.fa \
   --bins /path/to/concoct_bins /path/to/metabat2_bins /path/to/other_bins \
   --eukcc-db /path/to/eukcc_db \
   --output sample_1_selection
@@ -73,9 +72,9 @@ eukbinpicker \
 
 `--bins` accepts multiple directories or repeated arguments. Each directory must directly contain bin FASTA files (`.fa`, `.fna`, `.fasta`, optionally `.gz`); subdirectories are not searched. Any source is accepted, including tools outside the four bundled binners. Directory names identify sources; repeated names receive numeric suffixes. Original paths and checksums are recorded in `0_log/run.json`.
 
-All bins must come from the supplied assembly. EBP checks every contig ID and sequence, allowing letter case and reverse-complement differences. Use the complete assembly FASTA if your existing bins contain contigs outside the eukaryotic subset. This mode does not classify contigs or establish that every bin is eukaryotic.
+No assembly FASTA or coverage is required. EBP assumes the supplied bin sets come from the same assembly and retain the original contig IDs. It checks FASTA structure but does not verify assembly provenance or classify contigs. Overlap is calculated from matching contig IDs and normalized sequences within the supplied bins.
 
-Coverage and binning are skipped. Do not combine `--bins` with `--coverage`, coverage-column selectors or binner options. `--min-input-length` applies only when running binners; imported bins remain intact. Retention, QC and selection thresholds still apply. Retained bins are copied into `1_raw/` (gzip files are decompressed); source files are never modified. Different directories are compared as separate sources, while bins within one directory are not deduplicated against each other.
+Coverage and binning are skipped. Do not combine `--bins` with `--contigs`, `--coverage`, coverage-column selectors or binner options. `--min-input-length` applies only when running binners; imported bins remain intact. Retention, QC and selection thresholds still apply. Retained bins are copied into `1_raw/` (gzip files are decompressed); source files are never modified. Different directories are compared as separate sources, while bins within one directory are not deduplicated against each other.
 
 ## Coverage input
 
@@ -134,7 +133,7 @@ The installer includes SAMtools and `jgi_summarize_bam_contig_depths`. JGI produ
 | Parameter | Default | Description |
 | --- | --- | --- |
 | `--sample` | Required | Assembly/sample label: letters, digits, `.`, `_` or `-`. |
-| `--contigs` | Required | Eukaryotic contig FASTA for binning, or matching assembly FASTA for existing bins; unique IDs. |
+| `--contigs` | With coverage | Eukaryotic contig FASTA with unique IDs; not used with `--bins`. |
 | `--coverage` | Either coverage or bins | One or more coverage tables or indexed BAMs; repeatable. |
 | `--bins` | Either coverage or bins | Existing bin directories from the same assembly; repeatable. Skips binning. |
 | `--cov-contig-column` | Auto | Contig ID column name in custom tables. |

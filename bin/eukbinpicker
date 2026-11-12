@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import IO, Iterable, Optional, Sequence
 
 
-VERSION = "0.2"
+VERSION = "0.2.1"
 TOOL_NAME = "EukBinPicker"
 CLI_NAME = "eukbinpicker"
 BINNERS = ("remag", "concoct", "metabat2", "vamb")
@@ -1059,8 +1059,8 @@ def binner_parameters(args: argparse.Namespace) -> dict[str, list[str]]:
 def validate_args(args: argparse.Namespace) -> None:
     args.bin_sources = {}
     if args.bins:
-        if args.coverage or any((args.cov_contig_column, args.cov_mean_column, args.cov_variance_column)):
-            raise UserError("--bins cannot be combined with coverage or --cov-* options")
+        if args.contigs or args.coverage or any((args.cov_contig_column, args.cov_mean_column, args.cov_variance_column)):
+            raise UserError("--bins does not use --contigs, --coverage or --cov-* options")
         if args.binners != "all" or args.gpu != "F" or any(
             getattr(args, name + "_parameters") for name in BINNERS
         ):
@@ -1069,6 +1069,8 @@ def validate_args(args: argparse.Namespace) -> None:
         from import_bins import discover_bin_sets
         args.bin_sources = discover_bin_sets(args.bins)
     else:
+        if args.contigs is None:
+            raise UserError("--contigs is required with --coverage")
         resolve_coverage_inputs(args)
     selectors = (args.cov_contig_column, args.cov_mean_column, args.cov_variance_column)
     if args.bam and any(selectors):
@@ -1126,9 +1128,13 @@ def depth_column_options(args):
 
 
 def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
-    contigs = args.contigs.resolve()
+    contigs = args.contigs.resolve() if args.contigs else None
     depth_inputs = parse_depth_inputs(args.depth) if args.depth else ()
-    lengths = fasta_lengths(contigs, allow_empty=True)
+    if args.bins:
+        from import_bins import inspect_bin_sets
+        bin_inputs, lengths = inspect_bin_sets(args.bin_sources)
+    else:
+        lengths = fasta_lengths(contigs, allow_empty=True)
     eligible_lengths = OrderedDict(
         (identifier, length)
         for identifier, length in lengths.items()
@@ -1136,8 +1142,6 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
     )
     bam_summary = {}
     if args.bins:
-        from import_bins import validate_bin_sets
-        bin_inputs = validate_bin_sets(args.bin_sources, contigs)
         eligible_lengths = lengths
         depth_text = None
         depth_summary = dict(contigs=0, depth_source_count=0, depth_sources=[],
@@ -1456,8 +1460,8 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
     runtime = {
         **input_summary,
         "version": VERSION,
-        "contigs_path": str(args.contigs.resolve()),
-        "contigs_sha256": sha256_file(args.contigs.resolve()),
+        "contigs_path": str(args.contigs.resolve()) if args.contigs else None,
+        "contigs_sha256": sha256_file(args.contigs.resolve()) if args.contigs else None,
         "depth_inputs": [
             {
                 "path": str(depth_input.path),
@@ -1540,7 +1544,7 @@ def run_locked_workflow(args: argparse.Namespace) -> None:
     env_values: dict[str, object] = {
         "STUDY": INTERNAL_STUDY,
         "SAMPLE": args.sample,
-        "CONTIG_FASTA": args.contigs.resolve(),
+        "CONTIG_FASTA": args.contigs.resolve() if args.contigs else "",
         "DEPTH_TSV": normalized_depth,
         "BAM_LIST": config_dir / "bams.txt" if args.bam else "",
         "BAM_METADATA": run_metadata if args.bam else "",
@@ -1972,10 +1976,9 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
     required.add_argument(
         "--contigs",
-        required=True,
         type=Path,
         metavar="FASTA",
-        help="input contig FASTA with unique record IDs",
+        help="input contig FASTA with unique record IDs; required with --coverage, not used with --bins",
     )
     inputs = required.add_mutually_exclusive_group(required=True)
     inputs.add_argument(
