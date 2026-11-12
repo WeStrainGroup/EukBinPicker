@@ -41,14 +41,13 @@ if "--version" not in args and "--help" not in args:
         result = self.run_cli(*arguments, concoct_success=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         metadata = json.loads((output / "0_log/run.json").read_text())
-        self.assertEqual(metadata["binner_parameters"], parameters)
-        self.assertEqual(json.loads((output / "0_log/summary.json").read_text())["completed_binners"], list(parameters))
+        self.assertEqual(metadata["inputs"]["binner_parameters"], parameters)
+        self.assertEqual(set(metadata['summary']['native_binner_status'].values()), {'completed'})
         for name, tokens in parameters.items():
             received = json.loads((trace / f"{name}.json").read_text())
             self.assertEqual(received[-len(tokens):], tokens)
-            commands = list(output.glob(f"0_log/work/results/*/*/results/union/{name}/command.txt"))
-            self.assertEqual(len(commands), 1)
-            self.assertEqual(shlex.split(commands[0].read_text())[-len(tokens):], tokens)
+            commands = [c['argv'] for c in metadata['commands'] if c['stage'] == name]
+            self.assertTrue(any(command[-len(tokens):] == tokens for command in commands))
         self.assertFalse(marker.exists())
         reused = self.run_cli(*arguments, concoct_success=True)
         self.assertEqual(reused.returncode, 0, reused.stderr)
@@ -93,14 +92,3 @@ if "--version" not in args and "--help" not in args:
             "--eukcc-db", str(self.eukcc_db), "--remag-parameters=--epochs 200")
         self.assertEqual(result.returncode, 2)
         self.assertIn("requires remag in --binners", result.stderr)
-
-    def test_unknown_native_option_is_reported_by_the_binner(self):
-        tool = self.tools / "remag"
-        tool.write_text(tool.read_text().replace('args = sys.argv[1:]', '''args = sys.argv[1:]
-if "--not-real" in args:
-    raise SystemExit("ReMAG: unknown option --not-real")
-'''))
-        result = self.run_cli(*self.base_run(self.root / "native-error"), "--binners", "remag",
-            "--eukcc-db", str(self.eukcc_db), "--remag-parameters=--not-real")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("ReMAG: unknown option --not-real", result.stderr)

@@ -19,8 +19,6 @@ sys.modules[SPEC.name] = MODULE
 LOADER.exec_module(MODULE)
 
 sys.path.insert(0, str(PROJECT / "scripts"))
-from split_remag_coverage import SplitError, split_coverage
-from filter_prepared_inputs import filter_inputs
 
 
 class MultiCoverageTests(unittest.TestCase):
@@ -199,53 +197,6 @@ class MultiCoverageTests(unittest.TestCase):
                 self.lengths,
                 "assembly",
             )
-
-    def test_remag_adapter_writes_one_headerless_file_per_column(self) -> None:
-        matrix = self.write_depth(
-            "coverage.tsv",
-            "contig_id\talpha\tbeta\nc1\t1\t3\nc2\t2\t4\n",
-        )
-        out_dir = self.root / "remag"
-        metadata = split_coverage(matrix, out_dir)
-
-        self.assertEqual(
-            [item["coverage_name"] for item in metadata],
-            ["alpha", "beta"],
-        )
-        self.assertEqual(
-            (out_dir / "coverage.0001.tsv").read_text(encoding="utf-8"),
-            "c1\t1\nc2\t2\n",
-        )
-        self.assertEqual(
-            (out_dir / "coverage.0002.tsv").read_text(encoding="utf-8"),
-            "c1\t3\nc2\t4\n",
-        )
-        with self.assertRaisesRegex(SplitError, "non-empty output"):
-            split_coverage(matrix, out_dir)
-
-    def test_length_filter_preserves_all_coverage_dimensions(self) -> None:
-        fasta = self.root / "input.fa"
-        fasta.write_text(
-            ">c1\nAAAA\n>c2\nCCCC\n",
-            encoding="utf-8",
-        )
-        depth = self.write_depth(
-            "jgi.tsv",
-            "contigName\tcontigLen\ttotalAvgDepth\talpha\talpha-var\t"
-            "beta\tbeta-var\n"
-            "c1\t4\t4\t1\tNA\t3\tNA\n"
-            "c2\t4\t6\t2\tNA\t4\tNA\n",
-        )
-        output = self.root / "filtered"
-        self.assertEqual(filter_inputs(fasta, depth, "assembly", 4, output), "created")
-        self.assertEqual(
-            (output / "concoct.coverage.tsv").read_text(encoding="utf-8"),
-            "contig_id\talpha\tbeta\nc1\t1\t3\nc2\t2\t4\n",
-        )
-        self.assertEqual(
-            (output / "remag.coverage.tsv").read_text(encoding="utf-8"),
-            "c1\t4\nc2\t6\n",
-        )
 
 
 if __name__ == "__main__":

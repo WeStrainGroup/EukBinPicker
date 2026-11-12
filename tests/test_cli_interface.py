@@ -95,8 +95,8 @@ if "--version" not in args:
                 self.assertEqual({row["tool"] for row in traces}, {"remag", "vamb"})
                 self.assertTrue(all(row["device"] == device and row["visible"] == visible for row in traces), traces)
                 config = json.loads((output / "0_log/run.json").read_text())
-                self.assertEqual(config["gpu"], gpu)
-                self.assertEqual(set(config["cuda_devices"]), {"remag", "vamb"} if gpu == "T" else set())
+                self.assertEqual(config["inputs"]["gpu"], gpu)
+                self.assertEqual(set(config["inputs"]["cuda_devices"]), {"remag", "vamb"} if gpu == "T" else set())
         changed = self.run_cli(*self.base_run(self.root / "gpu-F"), "--binners", "remag,vamb",
             "--eukcc-db", str(self.eukcc_db), "--gpu", "T")
         self.assertNotEqual(changed.returncode, 0)
@@ -123,8 +123,9 @@ if "--version" not in args:
         result = self.run_cli(*args, "--binners", "metabat2",
                               "--eukcc-db", str(self.eukcc_db))
         self.assertEqual(result.returncode, 0, result.stderr)
-        summary = json.loads((output / "0_log/summary.json").read_text())
-        self.assertEqual(summary["qc_tools"], ["eukcc"])
+        record = json.loads((output / "0_log/run.json").read_text())
+        summary = record["summary"]
+        self.assertEqual(record["inputs"]["qc_tools"], ["eukcc"])
         self.assertEqual(summary["representatives"], 1)
         self.assertFalse((output / "2_qc/busco").exists())
 
@@ -140,9 +141,9 @@ if "--version" not in args:
             "--cov-variance-column", "var", "--eukcc-db", str(self.eukcc_db))
         self.assertEqual(result.returncode, 0, result.stderr)
         plan = json.loads((output / "0_log/run.json").read_text())
-        self.assertEqual(plan["coverage_input"], "table")
-        self.assertEqual(plan["coverage_columns"], ["depth", "second"])
-        self.assertEqual(plan["variance_available"], [True, True])
+        self.assertEqual(plan["inputs"]["coverage_input"], "table")
+        self.assertEqual(plan["inputs"]["coverage_columns"], ["depth", "second"])
+        self.assertEqual(plan["inputs"]["variance_available"], [True, True])
 
     def test_bam_signature_without_extension_routes_to_bam_validation(self):
         bam = self.root / "alignments.data"

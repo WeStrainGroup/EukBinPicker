@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Validate indexed BAMs and calculate native JGI contig coverage."""
 import hashlib
-import os
 from pathlib import Path
 import subprocess
 
@@ -104,24 +103,3 @@ def validate_bams(paths, lengths, fasta_handle, environment=None, conda="conda")
         finish()
     return {"bam_inputs": identities, "reference_sequence_check":
             "partial_or_absent_M5; matching_reference_provenance_required" if missing_m5 else "M5_verified"}
-
-
-def calculate_depth(paths, destination, threads, environment=None, conda="conda"):
-    destination = Path(destination)
-    receipt = destination.with_suffix(".sha256")
-    if receipt.exists():
-        if not destination.is_file() or hashlib.sha256(destination.read_bytes()).hexdigest() != receipt.read_text().strip():
-            raise ValueError(f"cached BAM depth was modified: {destination}")
-        return
-    temporary = destination.with_suffix(".tmp.tsv")
-    temporary.unlink(missing_ok=True)
-    command = tool_command(["jgi_summarize_bam_contig_depths", "--outputDepth", str(temporary),
-                            "--percentIdentity", "97", "--minMapQual", "0", "--maxEdgeBases", "75",
-                            *[str(p) for p in paths]], environment, conda)
-    env = dict(os.environ, OMP_NUM_THREADS=str(threads))
-    with destination.with_suffix(".log").open("w") as log:
-        result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env)
-    if result.returncode or not temporary.is_file() or not temporary.stat().st_size:
-        raise ValueError(f"JGI coverage failed; see {destination.with_suffix('.log')}")
-    temporary.replace(destination)
-    receipt.write_text(hashlib.sha256(destination.read_bytes()).hexdigest()+"\n")

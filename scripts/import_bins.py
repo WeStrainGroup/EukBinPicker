@@ -1,8 +1,8 @@
 """Read existing bin sets without changing their contigs or native bin boundaries."""
 from pathlib import Path
 
-from select_within_sample_representatives import fasta_contigs
-from seqkit_bin_stats import is_fasta, original_bin_id, safe_component, sha256_file
+from selection import fasta_contigs
+from bin_files import is_fasta, original_bin_id, safe_component, sha256_file
 
 
 def discover_bin_sets(directories: list[Path], reserved=()) -> dict[str, list[Path]]:

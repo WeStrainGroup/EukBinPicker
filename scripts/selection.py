@@ -1,64 +1,14 @@
-#!/usr/bin/env python3
-"""Select quality-passing representatives from overlapping cross-binner bins."""
-
+"""Quality-ranked selection using matching contig IDs and normalized sequences."""
 from __future__ import annotations
-
-import argparse
-import csv
-import gzip
-import hashlib
-import json
-import math
-import os
-import tempfile
 from collections import Counter
 from dataclasses import dataclass
+import gzip
+import hashlib
+import math
 from pathlib import Path
-from typing import Iterable, Optional, Sequence, TextIO
+from typing import TextIO
 
-
-REPRESENTATIVE_COLUMNS = (
-    "sample_rank",
-    "study",
-    "sample",
-    "selection_rank",
-    "representative_bin_id",
-    "selected_binner",
-    "bin_path",
-    "decision_qc",
-    "contamination_source",
-    "qc_pass",
-    "completeness",
-    "contamination",
-    "quality_score",
-    "contigs",
-    "n50",
-    "bp",
-    "shared_contig_bp",
-    "shared_contig_fraction",
-)
-ALTERNATIVE_COLUMNS = (
-    "sample_rank",
-    "study",
-    "sample",
-    "representative_bin_id",
-    "representative_binner",
-    "alternative_bin_id",
-    "alternative_binner",
-    "decision_qc",
-    "shared_bp",
-    "overlap",
-    "threshold",
-    "reason",
-    "matching_representative_count",
-    "matching_representatives",
-    "representative_quality_score",
-    "alternative_quality_score",
-)
-REVERSE_COMPLEMENT = str.maketrans(
-    "ACGTRYMKBDHVNWS",
-    "TGCAYRKMVHDBNWS",
-)
+REVERSE_COMPLEMENT = str.maketrans("ACGTRYMKBDHVNWS", "TGCAYRKMVHDBNWS")
 @dataclass
 class Candidate:
     row: dict[str, str]
@@ -83,61 +33,12 @@ class Candidate:
         return Path(self.row["bin_path"])
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-    )
-    temporary = Path(temporary_name)
-    try:
-        os.chmod(temporary, 0o660)
-        with os.fdopen(descriptor, "wt", encoding="utf-8", newline="\n") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def open_text(path: Path) -> TextIO:
     with path.open("rb") as probe:
         compressed = probe.read(2) == b"\x1f\x8b"
     if compressed:
         return gzip.open(path, "rt", encoding="utf-8", newline="")
     return path.open("rt", encoding="utf-8", newline="")
-
-
-def read_tsv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
-    with open_text(path) as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        return list(reader.fieldnames or []), list(reader)
-
-
-def clean(value: object) -> str:
-    return (
-        str(value if value is not None else "")
-        .replace("\t", " ")
-        .replace("\r", " ")
-        .replace("\n", " ")
-    )
-
-
-def tsv_text(columns: Sequence[str], rows: Iterable[dict[str, object]]) -> str:
-    lines = ["\t".join(columns) + "\n"]
-    for row in rows:
-        lines.append("\t".join(clean(row.get(column, "")) for column in columns) + "\n")
-    return "".join(lines)
 
 
 def parse_float(value: str, field: str, bin_id: str) -> float:
@@ -236,7 +137,7 @@ def candidate_sort_key(
         contamination=candidate.contamination,
         contig_count=candidate.contig_count,
         n50=candidate.n50,
-        bin_id=candidate.bin_id,
+        bin_id=candidate.row.get("sort_id", candidate.bin_id),
         contamination_penalty=contamination_penalty,
     )
 
@@ -248,9 +149,8 @@ def shared_overlap(left: Candidate, right: Candidate) -> tuple[int, float]:
     denominator = min(left.fasta_bp, right.fasta_bp)
     return shared, (shared / denominator if denominator else 0.0)
 
-
 def load_candidates(
-    qc_tsv: Path,
+    rows: list[dict],
     contamination_penalty: float,
     min_completeness: float,
     max_contamination: float,
@@ -258,7 +158,7 @@ def load_candidates(
     expected_study: str,
     expected_sample: str,
 ) -> list[Candidate]:
-    columns, rows = read_tsv(qc_tsv)
+    columns = set(rows[0]) if rows else set()
     required = {
         "bin_id",
         "sample_rank",
@@ -276,7 +176,7 @@ def load_candidates(
         "bp",
     }
     missing = sorted(required.difference(columns))
-    if missing:
+    if rows and missing:
         raise ValueError(f"QC table is missing columns: {', '.join(missing)}")
 
     candidates: list[Candidate] = []
@@ -352,16 +252,8 @@ def load_candidates(
         )
     return candidates
 
-
-def select(
-    qc_tsv: Path,
-    sample_metadata: Path,
-    out_dir: Path,
-    overlap_threshold: float,
-    contamination_penalty: float,
-    min_completeness: float,
-    max_contamination: float,
-) -> None:
+def select_rows(rows, overlap_threshold, contamination_penalty, min_completeness,
+                max_contamination, expected_rank, expected_study, expected_sample):
     if not 0.0 < overlap_threshold <= 1.0:
         raise ValueError("overlap threshold must be in (0, 1]")
     if not math.isfinite(contamination_penalty) or contamination_penalty < 0.0:
@@ -376,26 +268,8 @@ def select(
         or not 0.0 <= max_contamination <= 100.0
     ):
         raise ValueError("maximum contamination must be in [0, 100]")
-    try:
-        metadata = json.loads(sample_metadata.read_text(encoding="utf-8"))
-        expected_rank = int(metadata["rank"])
-        expected_study = str(metadata["study"])
-        expected_sample = str(metadata["sample"])
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-        raise ValueError(f"invalid sample metadata: {sample_metadata}") from error
-    if expected_rank < 1 or not expected_study or not expected_sample:
-        raise ValueError(f"invalid sample identity in {sample_metadata}")
-
-    candidates = load_candidates(
-        qc_tsv,
-        contamination_penalty,
-        min_completeness,
-        max_contamination,
-        expected_rank,
-        expected_study,
-        expected_sample,
-    )
-
+    candidates = load_candidates(rows, contamination_penalty, min_completeness,
+                                 max_contamination, expected_rank, expected_study, expected_sample)
     representative_rows: list[dict[str, object]] = []
     alternative_rows: list[dict[str, object]] = []
     representative_paths: list[str] = []
@@ -505,119 +379,4 @@ def select(
         row["shared_contig_bp"] = shared_bp
         row["shared_contig_fraction"] = f"{shared_bp / candidate.fasta_bp:.6f}"
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    representatives_path = out_dir / "representatives.tsv"
-    alternatives_path = out_dir / "alternatives.tsv"
-    paths_file = out_dir / "representative_genomes.list"
-    summary_path = out_dir / "selection.summary.json"
-    atomic_write(
-        representatives_path,
-        tsv_text(REPRESENTATIVE_COLUMNS, representative_rows),
-    )
-    atomic_write(
-        alternatives_path,
-        tsv_text(ALTERNATIVE_COLUMNS, alternative_rows),
-    )
-    atomic_write(
-        paths_file,
-        "".join(f"{path}\n" for path in representative_paths),
-    )
-    atomic_write(
-        summary_path,
-        json.dumps(
-            {
-                "schema_version": 3,
-                "method": "quality_ordered_cross_binner_overlap_suppression",
-                "sample_rank": expected_rank,
-                "study": expected_study,
-                "sample": expected_sample,
-                "sample_metadata": str(sample_metadata.resolve()),
-                "sample_metadata_sha256": sha256_file(sample_metadata),
-                "qc_tsv": str(qc_tsv.resolve()),
-                "qc_tsv_sha256": sha256_file(qc_tsv),
-                "min_completeness_inclusive": min_completeness,
-                "max_contamination_inclusive": max_contamination,
-                "overlap_definition": "shared_contig_bp/min(bin_a_bp,bin_b_bp)",
-                "overlap_threshold_inclusive": overlap_threshold,
-                "contamination_penalty": contamination_penalty,
-                "sort_order": [
-                    "quality_score_desc",
-                    "completeness_desc",
-                    "contamination_asc",
-                    "contig_count_asc",
-                    "n50_desc",
-                    "bin_id_asc",
-                ],
-                "same_binner_comparisons": "skipped",
-                "shared_contig_fraction_definition": "bp_shared_with_any_other_final_bin/bin_bp",
-                "shared_contig_fraction_scope": "all_final_bins_in_this_assembly_including_same_binner",
-                "samples": 1,
-                "eligible_candidates": len(candidates),
-                "representatives": len(representative_rows),
-                "alternatives": len(alternative_rows),
-                "ambiguous_merge": ambiguous,
-                "representatives_by_binner": dict(
-                    sorted(representative_by_binner.items())
-                ),
-                "alternatives_by_binner": dict(
-                    sorted(alternative_by_binner.items())
-                ),
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-    )
-    atomic_write(
-        out_dir / "selection.complete.json",
-        json.dumps(
-            {
-                "representatives_sha256": sha256_file(representatives_path),
-                "alternatives_sha256": sha256_file(alternatives_path),
-                "representative_genomes_sha256": sha256_file(paths_file),
-                "summary_sha256": sha256_file(summary_path),
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-    )
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--qc-tsv", required=True, type=Path)
-    parser.add_argument(
-        "--sample-metadata",
-        required=True,
-        type=Path,
-        help="Per-sample seqkit .done JSON containing rank/study/sample",
-    )
-    parser.add_argument("--out-dir", required=True, type=Path)
-    parser.add_argument("--overlap-threshold", type=float, default=0.50)
-    parser.add_argument("--contamination-penalty", type=float, default=5.0)
-    parser.add_argument("--min-completeness", type=float, default=50.0)
-    parser.add_argument("--max-contamination", type=float, default=10.0)
-    return parser
-
-
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
-    select(
-        args.qc_tsv,
-        args.sample_metadata,
-        args.out_dir,
-        args.overlap_threshold,
-        args.contamination_penalty,
-        args.min_completeness,
-        args.max_contamination,
-    )
-    print(
-        "select_within_sample_representatives.py: "
-        f"wrote {args.out_dir / 'representatives.tsv'}"
-    )
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    return representative_rows, alternative_rows

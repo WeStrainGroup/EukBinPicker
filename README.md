@@ -1,38 +1,38 @@
 # EukBinPicker
 
-**Recover eukaryotic genome bins with complementary binning methods.**
+Recover eukaryotic genome bins with complementary binning methods.
 
 ## Introduction
 
-Genome-resolved metagenomics helps reveal eukaryotic diversity and function, but genome recovery remains challenging. A typical workflow assembles quality-controlled reads, maps reads to the complete assembly, and identifies eukaryotic contigs with [EukContigMiner](https://github.com/WeStrainGroup/EukContigMiner) or similar tools. These contigs and their coverage profiles are then used to recover metagenome-assembled genomes (MAGs).
+Genome-resolved metagenomics helps reveal eukaryotic diversity and function, but genome recovery remains challenging. A typical workflow assembles quality-controlled reads, maps reads to the complete assembly, and identifies eukaryotic contigs with [EukContigMiner](https://github.com/WeStrainGroup/EukContigMiner) or similar tools. These contigs and their coverage profiles are then used to recover eukaryotic MAGs.
 
-Binning performance varies across samples and environments. Following the complementary-binner rationale of [DAS Tool](https://github.com/cmks/DAS_Tool), EukBinPicker (EBP) evaluates candidate bins from multiple sources and selects representatives based on quality estimates and shared contigs.
+The binning performance of existing tools varies across samples and environments. Following the complementary-binner rationale of [DAS Tool](https://github.com/cmks/DAS_Tool), EukBinPicker (EBP) evaluates candidate bins from multiple sources and selects representatives based on quality estimates and shared contigs.
 
-EBP integrates [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://bitbucket.org/berkeleylab/metabat/), [VAMB](https://github.com/RasmussenLab/vamb) and [REMAG](https://github.com/danielzmbp/remag), which use contig sequences and coverage without requiring prokaryotic marker genes or taxonomic assignments for binning. It also accepts existing bin sets, alone or alongside new binning. All candidates undergo the same quality assessment and selection workflow.
+EBP integrates [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://bitbucket.org/berkeleylab/metabat/), [VAMB](https://github.com/RasmussenLab/vamb) and [REMAG](https://github.com/danielzmbp/remag), which use contig sequences and coverage without requiring additional information, such as prokaryotic marker genes or taxonomic assignments, for binning. It also accepts existing bin sets, alone or alongside new binning. All candidates undergo the same quality assessment and selection workflow.
 
 ![EukBinPicker workflow](docs/ebp_workflow.png)
 
 ## Installation
 
-Install with Conda on Linux x86-64:
+Install with Conda:
 
 ```bash
-conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.3.1
+conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.4
 conda activate eukbinpicker
 ```
 
-Or install from GitHub with Conda and curl available:
+Or install a tagged release from GitHub with Git and Conda available:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/WeStrainGroup/EukBinPicker/v0.3.1/install.sh | bash -s -- --prefix "$HOME/conda-envs/eukbinpicker"
+git clone --depth 1 --branch v0.4 https://github.com/WeStrainGroup/EukBinPicker.git
+cd EukBinPicker
+bash install.sh --prefix "$HOME/conda-envs/eukbinpicker"
 conda activate "$HOME/conda-envs/eukbinpicker"
 ```
 
 Download reference databases separately. Provide an unpacked [EukCC database](https://github.com/Finn-Lab/EukCC) with `--eukcc-db`, or a [BUSCO lineage](https://busco.ezlab.org/) with `--busco-db`. Alternatively, set `EUKBINPICKER_EUKCC_DB` or `EUKBINPICKER_BUSCO_DB`.
 
 ## Quick start
-
-### From contigs
 
 Bin eukaryotic contigs using their coverage profiles, then select representative bins.
 
@@ -45,8 +45,6 @@ eukbinpicker \
   --output sample_1_ebp
 ```
 
-### From existing bin sets
-
 Select representative bins from existing bin sets.
 
 ```bash
@@ -56,8 +54,6 @@ eukbinpicker \
   --eukcc-db /path/to/eukcc_db \
   --output sample_1_ebp
 ```
-
-### From both
 
 Run new binning and select representatives jointly with existing bins from the same assembly.
 
@@ -72,38 +68,6 @@ eukbinpicker \
 ```
 
 Selected FASTA files are written to `3_selection/bins/` within the output directory.
-
-## Coverage inputs
-
-`--coverage`: coverage tables **or** indexed BAMs. Do not mix the two formats. Map reads from the source sample or multiple samples to the same assembly. Full-assembly coverage is accepted; EBP extracts the supplied contigs. Every input must include all FASTA contig IDs, including those below the length threshold. Zero coverage is valid; missing entries are not.
-
-### Tables
-
-Use tab-separated tables with headers, optionally gzip-compressed. JGI depth tables and mean-coverage matrices are detected automatically. IDs must be unique, values finite and non-negative, and supplied contig lengths must match the FASTA.
-
-For custom headers, specify the contig and mean columns. For this table:
-
-```txt
-sequence_id	A_mean	B_mean	A_var	B_var
-contig_1	12.4	8.1	2.0	1.4
-contig_2	0.0	3.2	0.0	0.6
-```
-
-Add these options to the binning command:
-
-```txt
---cov-contig-column sequence_id
---cov-mean-column A_mean,B_mean
---cov-variance-column A_var,B_var
-```
-
-Variance columns are optional and follow the mean-column order. If using MetaBAT2, provide variance for all coverage dimensions or none. Column settings apply to every table.
-
-### BAMs
-
-Use one coordinate-sorted BAM per mapping sample, each with a `.bai` or `.csi` index. BAM basenames must be unique; reference IDs, lengths and order must match across BAMs. The contig FASTA must match a subset of these references.
-
-Example: `--coverage sample_A.bam sample_B.bam`. EBP calculates coverage from the alignments without remapping reads.
 
 ## Parameters
 
@@ -122,24 +86,58 @@ Default values are shown below. **—** means no preset value; input requirement
 | `--cov-variance-column` | — | Comma-separated variance columns, paired with means. |
 | `--output` | — | Required output directory. |
 
-Provide `--coverage`, `--bins`, or both. Use eukaryotic inputs from the same assembly with original contig IDs. Imported bins remain intact; assembly provenance is assumed. Coverage-column selectors apply only to tables; omit them for automatic detection.
+Use coverage from one or more samples mapped to the same complete assembly. EBP extracts the rows matching the supplied eukaryotic FASTA; all its contigs must have coverage entries. Zero coverage is valid, but missing entries are not.
 
-### Binning and resources
+**BAM input.** Pass `--coverage sample_A.bam sample_B.bam`. Use coordinate-sorted, indexed BAMs with unique basenames and the same reference IDs, lengths and order. For example, map one sample's clean paired-end reads with Bowtie2 and prepare the BAM with SAMtools:
+
+```bash
+bowtie2-build assembly.fa assembly_index
+bowtie2 -x assembly_index \
+  -1 sample_A.clean_R1.fq.gz -2 sample_A.clean_R2.fq.gz \
+  --very-sensitive --no-unal --seed 6311 -p 4 \
+  | samtools sort -@ 4 -o sample_A.bam -
+samtools index sample_A.bam
+```
+
+For additional samples, repeat the mapping, sorting and indexing with the same assembly index. EBP uses these alignments without remapping reads.
+
+**JGI tables.** Alternatively, generate a coverage table from the BAMs, with one mean/variance pair per sample:
+
+```bash
+jgi_summarize_bam_contig_depths \
+--outputDepth assembly_depth.tsv \
+sample_A.bam sample_B.bam
+```
+
+Pass `--coverage assembly_depth.tsv`; EBP recognizes the [JGI format](https://bitbucket.org/berkeleylab/metabat/src/master/) automatically. For single-sample coverage, use one BAM.
+
+**Custom tables.** You can also supply a tab-separated table with a header, unique contig IDs and finite, non-negative coverage values. For columns named `sequence_id`, `A_mean`, `B_mean`, `A_var` and `B_var`, add:
+
+```bash
+--cov-contig-column sequence_id \
+--cov-mean-column A_mean,B_mean \
+--cov-variance-column A_var,B_var
+```
+
+Variance is optional; if provided, pair it with the mean columns in the same order. Only MetaBAT2 uses variance, requiring it for all samples or none; mean-only input uses its native `--cvExt` mode. The other three binners use mean coverage.
+
+### Binning
 
 | Parameter | Default | Description |
 | --- | --- | --- |
+| `--min-input-length` | `1500` | Minimum contig length for binning, in bp; imported bins remain intact. |
 | `--binners` | `all` | All four tools or a comma-separated subset of `remag,concoct,metabat2,vamb`. |
 | `--threads` | `4` | Threads supplied to each tool. |
 | `--random-seed` | `6311` | Shared positive seed for binning. |
-| `--gpu` | `F` | `T`: CUDA for selected REMAG/VAMB; `F`: CPU. |
+| `--gpu` | `F` | `T`: CUDA for selected REMAG/VAMB; other tools remain on CPU. `F`: CPU for all tools. |
 | `--remag-parameters` | — | Quoted native REMAG options. |
 | `--concoct-parameters` | — | Quoted native CONCOCT options. |
 | `--metabat2-parameters` | — | Quoted native MetaBAT2 options. |
 | `--vamb-parameters` | — | Quoted native VAMB options. |
 
-EBP retains native algorithm defaults with a shared input threshold and seed. CONCOCT uses 10-kb fragments, native normalization and 400 clusters. MetaBAT2 and REMAG retain their native 200-kb and 500-kb output minima. VAMB retains native training and bin splitting, with nonempty FASTA export enabled. `--min-retain-length` does not lower native output minima. REMAG's classifier is skipped: supply contigs already identified as eukaryotic.
+EBP retains native algorithm defaults, with a shared `--min-input-length` and random seed. MetaBAT2 requires a contig-length threshold of at least 1,500 bp; VAMB requires at least 250 bp. REMAG and CONCOCT use the supplied threshold. Keep `--min-input-length` at 1,500 bp or above when running all four binners. This threshold applies to contigs, whereas `--min-retain-length` applies to whole bins.
 
-MetaBAT2 uses observed variance or native mean-only coverage; REMAG, CONCOCT and VAMB use means. CONCOCT calculates fragment coverage from BAMs, or approximates it from parent-contig means when given tables.
+REMAG's classifier is skipped because the supplied contigs are expected to have already been identified as eukaryotic. CONCOCT calculates fragment coverage from BAMs, or approximates it from parent-contig means when given tables.
 
 To customize a binner, pass native options in one quoted string:
 
@@ -154,32 +152,24 @@ eukbinpicker \
   --metabat2-parameters "--maxP 90"
 ```
 
-REMAG and VAMB run sequentially and can share one allocated GPU. CONCOCT, MetaBAT2 and QC use CPU. `--gpu T` checks CUDA availability; it does not request hardware from a scheduler.
-
-### Quality assessment
+### Quality assessment and selection
 
 | Parameter | Default | Description |
 | --- | --- | --- |
+| `--min-retain-length` | `0` | Additional bin-retention minimum, in bp; `0` disables it. |
+| `--min-selection-length` | `500000` | Minimum bin length entering QC and selection, in bp. |
 | `--qc-tools` | `eukcc` | `eukcc`, `busco`, `eukcc,busco` or `all`. |
 | `--qc-decision` | `eukcc` | Executed QC tool used for filtering and ranking. |
 | `--eukcc-db` | — | Unpacked EukCC database; required when EukCC is selected. |
 | `--busco-db` | — | Unpacked BUSCO lineage with `dataset.cfg` and `hmms/`; required when BUSCO is selected. |
-
-Database paths may also come from the environment variables listed under Installation. To rank with BUSCO, include it in `--qc-tools` and set `--qc-decision busco`. Its duplicated percentage is used as a contamination proxy.
-
-### Filtering and selection
-
-| Parameter | Default | Description |
-| --- | --- | --- |
-| `--min-input-length` | `1500` | Minimum contig length for binning, in bp; imported bins remain intact. |
-| `--min-retain-length` | `0` | Additional bin-retention minimum, in bp; `0` disables it. |
-| `--min-selection-length` | `500000` | Minimum bin length entering QC and selection, in bp. |
 | `--min-selection-completeness` | `0` | Minimum completeness, in %. |
 | `--max-selection-contamination` | `100` | Maximum contamination or BUSCO proxy, in %. |
 | `--contamination-penalty` | `5` | Contamination penalty in the ranking score. |
 | `--min-overlap` | `0.50` | Overlap threshold between candidates from different sources. |
 
-Thresholds are inclusive. Selection length must be at least retention length. Valid QC estimates are required even with the permissive completeness and contamination defaults; selected bins are not necessarily high-quality MAGs.
+All retained bins meeting `--min-selection-length` undergo QC. By default, bins with valid QC estimates enter representative selection under the permissive 0% completeness and 100% contamination thresholds. Use `--min-selection-completeness` and `--max-selection-contamination` to set stricter quality requirements.
+
+To rank with BUSCO, include it in `--qc-tools` and set `--qc-decision busco`. BUSCO's duplicated percentage is used as a contamination proxy.
 
 ### Information
 
@@ -196,6 +186,8 @@ Candidates passing the length and QC thresholds are ranked by:
 score = completeness − contamination_penalty × contamination
 ```
 
+Ties are resolved by higher completeness, lower contamination, fewer contigs, higher N50, then lexicographic order of `source__bin_id`.
+
 EBP considers candidates in descending quality order. If a candidate overlaps an already selected, higher-ranked bin from a different source within the same assembly, and the overlap reaches `--min-overlap` (default: 0.50), that selected bin represents the candidate. Otherwise, the candidate is retained as another representative.
 
 ```txt
@@ -206,14 +198,37 @@ A source is one native binner or one imported directory. Bins within a source ar
 
 ## Outputs
 
-| Path | Contents |
-| --- | --- |
-| `0_log/` | Input metadata, run summary, commands and internal records. |
-| `1_raw/` | Retained bin FASTA files, grouped by source. |
-| `2_qc/` | Per-tool QC results and `summary.tsv` with source, SeqKit statistics and QC metrics for each assessed bin. |
-| `3_selection/` | `bins/` with selected FASTAs and checksums; `representatives.tsv` with quality metrics, shared-contig statistics and represented bins. |
+```text
+sample_1_ebp/
+├── 0_log/
+│   ├── run.json                 # Inputs, commands, status and result checksums
+│   └── run.log                  # Progress, warnings and tool output
+├── 1_raw/
+│   └── <source>/
+│       └── <original_bin>.fa    # Retained candidate bins
+├── 2_qc/
+│   ├── summary.tsv              # Statistics, QC metrics and status for every retained bin
+│   └── evidence/
+│       └── <source>/
+│           └── <bin_id>/
+│               ├── eukcc/       # Quality report and marker evidence, when available
+│               └── busco/       # Short summary and compressed full marker table
+└── 3_selection/
+    ├── representatives.tsv      # Final bin IDs, original sources and quality statistics
+    ├── selection.tsv            # Candidate decisions and matching representatives
+    └── bins/
+        ├── bin_1.fa
+        ├── bin_2.fa
+        └── ...
+```
 
-Check `0_log/summary.json` for source and selection counts. The `native_binner_status` field distinguishes `completed`, `failed` and `skipped_empty_input`; completion does not imply that a binner produced bins. Logs are in `0_log/logs/`. Imported candidates can still be processed if native branches fail or no contigs pass the input-length threshold. Reusing an output directory requires matching inputs, parameters, software and intact outputs; otherwise, use a new directory.
+Final bins are numbered in selection order. `representatives.tsv` maps each new ID to its source, original bin ID and filename, and includes quality metrics, shared-contig statistics and represented candidates. `selection.tsv` records why each candidate was selected or excluded, its assigned representative and any additional matching representatives. Candidate references use `source/bin_id`.
+
+QC evidence is grouped by source and bin; only the requested QC tools are included. `summary.tsv` distinguishes bins below the QC length threshold, unassessable bins and valid quality estimates.
+
+`run.json` records workflow status, per-stage outcomes, actual commands and checksums. A completed run may contain failed native binners; check `partial` and `summary.native_binner_status`. Valid imported bins can still be selected if native binning fails or no contigs pass the input-length threshold.
+
+Temporary files are limited to `.work/`. Each completed stage releases its working files after its results have been checked; failed-stage files are retained for diagnosis. After an interrupted or failed run, repeat the same command to reuse verified completed stages and rerun unfinished stages. Reuse requires matching inputs, parameters, software and intact results. Use a new output directory when these change, including when upgrading from an earlier version.
 
 ## License
 

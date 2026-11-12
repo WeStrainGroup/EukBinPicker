@@ -58,10 +58,10 @@ class ReferenceDatasetCliTests(unittest.TestCase):
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             plan = json.loads((root / "output/0_log/run.json").read_text())
-            references = plan["qc_references"]
+            references = plan["inputs"]["qc_references"]
             self.assertEqual(references["eukcc_db"], str(eukcc_db.resolve()))
             self.assertEqual(references["busco_db"], str(busco_db.resolve()))
-            self.assertEqual(plan["random_seed"], 6311)
+            self.assertEqual(plan["inputs"]["random_seed"], 6311)
 
     def test_new_environment_names_take_priority_over_legacy_aliases(
         self,
@@ -101,7 +101,7 @@ class ReferenceDatasetCliTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             report = json.loads((root / "output/0_log/run.json").read_text())
             self.assertEqual(
-                report["qc_references"]["eukcc_db"],
+                report["inputs"]["qc_references"]["eukcc_db"],
                 str(preferred.resolve()),
             )
 

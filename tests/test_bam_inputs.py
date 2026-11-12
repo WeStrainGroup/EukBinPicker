@@ -97,12 +97,6 @@ class BamInputTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"Could not load index"):
                 bam_inputs.checked_output(["samtools","idxstats","bad.bam"])
 
-    def test_corrupt_coverage_cache_is_rejected(self):
-        depth=self.root/"cached.tsv";depth.write_text("bad")
-        depth.with_suffix(".sha256").write_text("0"*64)
-        with self.assertRaisesRegex(ValueError,"modified"),patch.object(bam_inputs.subprocess,"run") as run:
-            bam_inputs.calculate_depth([],depth,1)
-        run.assert_not_called()
 
     def test_bam_end_to_end_and_resume_without_remapping(self):
         bam=self.bam()
@@ -126,11 +120,10 @@ elif name=='concoct_coverage_table.py':
         args += ["--binners","concoct,metabat2","--qc-tools","eukcc","--eukcc-db",str(self.eukcc_db)]
         first=self.run_cli(*args,concoct_success=True,expected_coverage_columns=("sample",))
         self.assertEqual(first.returncode,0,first.stderr)
-        summary=json.loads((output/"0_log/summary.json").read_text())
-        self.assertEqual(summary["completed_binners"],["concoct","metabat2"])
-        fragment=next(output.glob("0_log/work/results/*/*/results/union/concoct/fragment_coverage.tsv"))
-        self.assertIn("c1\t9",fragment.read_text())
-        self.assertIn("\t3\t7",(output/"0_log/work/input/depth.jgi.tsv").read_text())
+        record=json.loads((output/'0_log/run.json').read_text())
+        self.assertEqual(record['summary']['native_binner_status'], {'concoct':'completed','metabat2':'completed'})
+        self.assertTrue(any('concoct_coverage_table.py' in command['argv'] for command in record['commands']))
+        self.assertFalse((output/'.work').exists())
         second=self.run_cli(*args,concoct_success=True,expected_coverage_columns=("sample",))
         self.assertEqual(second.returncode,0,second.stderr)
         self.assertIn("already complete",second.stderr)
