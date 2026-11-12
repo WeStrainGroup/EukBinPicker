@@ -230,6 +230,10 @@ QC evidence is grouped by source and bin; only the requested QC tools are includ
 
 Temporary files are limited to `.work/`. Each completed stage releases its working files after its results have been checked; failed-stage files are retained for diagnosis. After an interrupted or failed run, repeat the same command to reuse verified completed stages and rerun unfinished stages. Reuse requires matching inputs, parameters, software and intact results. Use a new output directory when these change, including when upgrading from an earlier version.
 
+## Contact
+
+Xinyu Wang: [wangxinyu30@westlake.edu.cn](mailto:wangxinyu30@westlake.edu.cn)
+
 ## License
 
 EukBinPicker is distributed under [CC BY-NC-SA 4.0](https://github.com/WeStrainGroup/EukBinPicker/blob/main/LICENSE). External tools and databases retain their respective licenses.
