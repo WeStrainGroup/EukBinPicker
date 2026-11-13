@@ -139,7 +139,7 @@ Variance is optional; if provided, pair it with the mean columns in the same ord
 | `--gpu` | `F` | `T`: CUDA for selected REMAG/VAMB; other tools remain on CPU. `F`: CPU for all tools. |
 | `--random-seed` | `6311` | Shared positive seed for binning. |
 
-Set `--binning-only T` to save candidate bins without QC or selection, then supply their directories through `--bins` in a later run with `--binning-only F` (default), optionally alongside other binners.
+Set `--binning-only T` to save candidate bins without QC or selection, then supply their directories through `--bins` in a later run with `--binning-only F` (default), optionally alongside other binners. This can help reduce computing costs by running GPU and CPU binners in separate jobs, releasing the GPU before CPU binning and quality assessment.
 
 EBP uses native algorithm defaults unless overridden, with shared contig-length, bin-size and random-seed settings. `--min-input-length` filters contigs for new binning; imported bins are not trimmed. MetaBAT2 requires at least 1,500 bp and VAMB at least 250 bp, so use 1,500 bp or above when running all four binners.
 
