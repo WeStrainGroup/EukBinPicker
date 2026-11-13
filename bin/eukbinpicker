@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import IO, Iterable, Optional, Sequence
 
 
-VERSION = "0.43"
+VERSION = "0.44"
 TOOL_NAME = "EukBinPicker"
 CLI_NAME = "eukbinpicker"
 BINNERS = ("remag", "concoct", "metabat2", "vamb")
@@ -718,6 +718,8 @@ def binner_parameters(args: argparse.Namespace) -> dict[str, list[str]]:
 def validate_args(args: argparse.Namespace) -> None:
     if not args.coverage and not args.bins:
         raise UserError("provide --coverage, --bins, or both")
+    if args.binning_only == "T" and not args.coverage:
+        raise UserError("--binning-only T requires --contigs and --coverage")
     args.input_mode = "combined" if args.coverage and args.bins else ("binning" if args.coverage else "bins")
     args.binner_list = parse_choices(args.binners, BINNERS, "binners") if args.coverage else ()
     args.bin_sources = {}
@@ -745,34 +747,36 @@ def validate_args(args: argparse.Namespace) -> None:
     args.binner_parameters = binner_parameters(args)
     if args.gpu == "T" and not {"remag", "vamb"}.intersection(args.binner_list):
         raise UserError("--gpu T requires remag or vamb in --binners")
-    args.qc_list = parse_choices(args.qc_tools, QC_TOOLS, "QC tools")
-    if args.qc_decision not in args.qc_list:
-        raise UserError("--qc-decision must also occur in --qc-tools")
     if args.min_retain_size < 0:
         raise UserError("--min-retain-size must be non-negative")
-    if args.min_selection_size < 0:
-        raise UserError("--min-selection-size must be non-negative")
-    if args.min_selection_size < args.min_retain_size:
-        raise UserError(
-            "--min-selection-size must be >= --min-retain-size"
-        )
-    if not 0.0 < args.min_overlap <= 1.0:
-        raise UserError("--min-overlap must be in (0, 1]")
-    if (
-        not math.isfinite(args.contamination_penalty)
-        or args.contamination_penalty < 0
-    ):
-        raise UserError("--contamination-penalty must be non-negative")
-    if (
-        not math.isfinite(args.min_selection_completeness)
-        or not 0.0 <= args.min_selection_completeness <= 100.0
-    ):
-        raise UserError("--min-selection-completeness must be in [0, 100]")
-    if (
-        not math.isfinite(args.max_selection_contamination)
-        or not 0.0 <= args.max_selection_contamination <= 100.0
-    ):
-        raise UserError("--max-selection-contamination must be in [0, 100]")
+    args.qc_list = ()
+    if args.binning_only == "F":
+        args.qc_list = parse_choices(args.qc_tools, QC_TOOLS, "QC tools")
+        if args.qc_decision not in args.qc_list:
+            raise UserError("--qc-decision must also occur in --qc-tools")
+        if args.min_selection_size < 0:
+            raise UserError("--min-selection-size must be non-negative")
+        if args.min_selection_size < args.min_retain_size:
+            raise UserError(
+                "--min-selection-size must be >= --min-retain-size"
+            )
+        if not 0.0 < args.min_overlap <= 1.0:
+            raise UserError("--min-overlap must be in (0, 1]")
+        if (
+            not math.isfinite(args.contamination_penalty)
+            or args.contamination_penalty < 0
+        ):
+            raise UserError("--contamination-penalty must be non-negative")
+        if (
+            not math.isfinite(args.min_selection_completeness)
+            or not 0.0 <= args.min_selection_completeness <= 100.0
+        ):
+            raise UserError("--min-selection-completeness must be in [0, 100]")
+        if (
+            not math.isfinite(args.max_selection_contamination)
+            or not 0.0 <= args.max_selection_contamination <= 100.0
+        ):
+            raise UserError("--max-selection-contamination must be in [0, 100]")
     if args.threads < 1:
         raise UserError("--threads must be positive")
     if not 1 <= args.random_seed <= 4294967295:
@@ -882,6 +886,7 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
         "depth_rows": depth_summary["contigs"],
         "normalized_depth_bytes": depth_bytes,
         "input_mode": args.input_mode,
+        "binning_only": args.binning_only == "T",
         "bin_inputs": bin_inputs if args.bins else [],
         "coverage_input": ("bam" if args.bam else "table") if args.coverage else None,
         "variance_available": depth_summary["variance_available"],
@@ -901,26 +906,30 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
         "binner_parameters": args.binner_parameters,
         "gpu": args.gpu,
         "qc_tools": list(args.qc_list),
-        "decision_qc": args.qc_decision,
+        "decision_qc": args.qc_decision if args.qc_list else None,
         "random_seed": args.random_seed,
         "contamination_source": (
-            "eukcc_contamination"
-            if args.qc_decision == "eukcc"
-            else "busco_duplicated"
+            ("eukcc_contamination" if args.qc_decision == "eukcc" else "busco_duplicated")
+            if args.qc_list else None
         ),
-        "min_completeness": args.min_selection_completeness,
-        "max_contamination": args.max_selection_contamination,
-        "contamination_penalty": args.contamination_penalty,
+        "min_completeness": args.min_selection_completeness if args.qc_list else None,
+        "max_contamination": args.max_selection_contamination if args.qc_list else None,
+        "contamination_penalty": args.contamination_penalty if args.qc_list else None,
         "qc_references": qc_references,
         "retain_min_bin_bp": args.min_retain_size,
-        "qc_min_bin_bp": args.min_selection_size,
+        "qc_min_bin_bp": args.min_selection_size if args.qc_list else None,
         "min_contig_bp": args.min_input_length,
-        "overlap_threshold": args.min_overlap,
+        "overlap_threshold": args.min_overlap if args.qc_list else None,
     }
 
 
 def add_workflow_arguments(parser: argparse.ArgumentParser) -> None:
     workflow = parser.add_argument_group("workflow selection")
+    workflow.add_argument(
+        "--binning-only", choices=("T", "F"), default="F",
+        help="T: retain candidate bins without QC or selection; requires contigs and coverage; "
+             "omit QC/selection options; F: full workflow (default: F)",
+    )
     workflow.add_argument(
         "--binners",
         default="all",
@@ -1141,7 +1150,15 @@ def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                 continue
         normalized.append(token)
         index += 1
-    return parser.parse_args(normalized)
+    args = parser.parse_args(normalized)
+    if args.binning_only == "T":
+        qc_options = {"--qc-tools", "--qc-decision", "--eukcc-db", "--busco-db",
+                      "--min-selection-size", "--min-selection-completeness",
+                      "--max-selection-contamination", "--contamination-penalty", "--min-overlap"}
+        unused = sorted({token.split("=", 1)[0] for token in normalized} & qc_options)
+        if unused:
+            parser.error("--binning-only T skips QC and selection; omit " + ", ".join(unused))
+    return args
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

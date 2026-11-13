@@ -1,4 +1,4 @@
-{% set version = "0.43" %}
+{% set version = "0.44" %}
 package:
   name: eukbinpicker
   version: {{ version }}

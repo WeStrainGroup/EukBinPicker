@@ -8,7 +8,7 @@ Genome-resolved metagenomics helps reveal eukaryotic diversity and function, but
 
 Binning performance varies across samples and environments. Following the complementary-binner rationale of [DAS Tool](https://github.com/cmks/DAS_Tool), EukBinPicker (EBP) evaluates candidate bins from multiple sources and selects representatives based on quality estimates and shared contigs.
 
-EBP integrates [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://bitbucket.org/berkeleylab/metabat/), [VAMB](https://github.com/RasmussenLab/vamb) and [REMAG](https://github.com/danielzmbp/remag), which use contig sequences and coverage without requiring additional information, such as prokaryotic marker genes or taxonomic assignments, for binning. It also accepts existing bin sets, alone or alongside new binning. All candidates undergo the same quality assessment and selection workflow.
+EBP integrates [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://bitbucket.org/berkeleylab/metabat/), [VAMB](https://github.com/RasmussenLab/vamb) and [REMAG](https://github.com/danielzmbp/remag), which use contig sequences and coverage without requiring additional information, such as prokaryotic marker genes or taxonomic assignments, for binning. It also accepts existing bin sets, alone or alongside new binning. By default, all candidates undergo the same quality assessment and selection workflow.
 
 ![EukBinPicker workflow](docs/ebp_workflow.png)
 
@@ -17,14 +17,14 @@ EBP integrates [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://
 Install with Conda:
 
 ```bash
-conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.42
+conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.44
 conda activate eukbinpicker
 ```
 
 Or install a tagged release from GitHub with Git and Conda available:
 
 ```bash
-git clone --depth 1 --branch v0.42 https://github.com/WeStrainGroup/EukBinPicker.git
+git clone --depth 1 --branch v0.44 https://github.com/WeStrainGroup/EukBinPicker.git
 cd EukBinPicker
 bash install.sh --prefix "$HOME/conda-envs/eukbinpicker"
 conda activate "$HOME/conda-envs/eukbinpicker"
@@ -134,9 +134,12 @@ Variance is optional; if provided, pair it with the mean columns in the same ord
 | `--concoct-parameters` | — | Quoted native CONCOCT options. |
 | `--metabat2-parameters` | — | Quoted native MetaBAT2 options. |
 | `--vamb-parameters` | — | Quoted native VAMB options. |
-| `--threads` | `4` | Threads supplied to each tool. |
+| `--binning-only` | `F` | `T`: save candidates without QC or selection; omit QC/selection options. `F`: full workflow. |
+| `--threads` | `4` | Threads supplied to each tool; JGI uses half (minimum 1). |
 | `--gpu` | `F` | `T`: CUDA for selected REMAG/VAMB; other tools remain on CPU. `F`: CPU for all tools. |
 | `--random-seed` | `6311` | Shared positive seed for binning. |
+
+Set `--binning-only T` to save candidate bins without QC or selection, then supply their directories through `--bins` in a later run with `--binning-only F` (default), optionally alongside other binners.
 
 EBP uses native algorithm defaults unless overridden, with shared contig-length, bin-size and random-seed settings. `--min-input-length` filters contigs for new binning; imported bins are not trimmed. MetaBAT2 requires at least 1,500 bp and VAMB at least 250 bp, so use 1,500 bp or above when running all four binners.
 
@@ -204,6 +207,8 @@ Ties are resolved by higher completeness, lower contamination, fewer contigs, hi
 
 ## Outputs
 
+The full workflow writes the tree below; `--binning-only T` writes only `0_log/` and `1_raw/`.
+
 ```text
 sample_1_ebp/
 ├── 0_log/
@@ -232,7 +237,7 @@ Final bins are numbered in selection order. `representatives.tsv` maps each new 
 
 QC evidence is grouped by source and bin; only the requested QC tools are included. `summary.tsv` distinguishes bins below the QC size threshold, unassessable bins and valid quality estimates.
 
-`run.json` records workflow status, per-stage outcomes, actual commands and checksums. A completed run may contain failed native binners; check `partial` and `summary.native_binner_status`. Valid imported bins can still be selected if native binning fails or no contigs pass the input-length threshold.
+`run.json` records workflow status, per-stage outcomes, actual commands and checksums. Binning-only runs record `status: binning_completed`, with QC and selection marked as skipped. A completed run may contain failed native binners; check `partial` and `summary.native_binner_status`. Valid imported bins can still be selected if native binning fails or no contigs pass the input-length threshold.
 
 Working files stay in `.work/`. Completed stages remove them after output verification; failed stages retain them for diagnosis. To resume an interrupted or failed run, repeat the same command. EBP reuses verified completed stages and reruns unfinished ones. Use a new output directory if inputs, parameters or software change, including after an upgrade.
 

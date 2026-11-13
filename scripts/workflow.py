@@ -219,7 +219,7 @@ class Run:
             self.state = json.loads(self.record.read_text())
             if self.state.get('inputs') != identity:
                 raise ValueError('output inputs, parameters or software differ; use a new output directory')
-            if self.state.get('status') == 'completed':
+            if self.state.get('status') in {'completed', 'binning_completed'}:
                 self.verify(self.state['checksums'])
                 expected = set(self.state['checksums'])
                 actual = {str(p.relative_to(self.out)) for folder in ('1_raw', '2_qc', '3_selection')
@@ -237,7 +237,8 @@ class Run:
             self.state = dict(schema_version=4, tool='EukBinPicker', version=self.api.VERSION,
                               inputs=identity, stages={}, commands=[], bins=[], started_at=now())
         (self.out / '0_log').mkdir(exist_ok=True)
-        for name in ('1_raw', '2_qc', '3_selection'):
+        folders = ('1_raw',) if self.args.binning_only == 'T' else ('1_raw', '2_qc', '3_selection')
+        for name in folders:
             (self.out / name).mkdir(exist_ok=True)
         self.work.mkdir(exist_ok=True)
         self.state.update(status='running', error=None)
@@ -296,6 +297,15 @@ class Run:
             raise ValueError('all requested binners failed; see 0_log/run.log')
         if args.binner_list and self.inputs['eligible_contigs'] and not completed and args.bin_sources:
             self.message('all requested binners failed; continuing with imported bin sets')
+
+    def export_binning(self):
+        self.state['summary'] = dict(input_mode=self.args.input_mode,
+            retained_bins=len(self.state['bins']), qc_status='skipped_binning_only',
+            selection_status='skipped_binning_only',
+            native_binner_status={s: self.state['stages'][s]['status'] for s in self.args.binner_list},
+            imported_sources=list(self.args.bin_sources))
+        self.finish('binning_completed')
+        self.message(f"binning complete: {len(self.state['bins'])} retained candidates; QC and selection skipped")
 
     def qc(self):
         successful = {}  # Exact FASTA bytes, same tool/reference/settings, this invocation only.
@@ -423,6 +433,10 @@ class Run:
             representatives=len(reps), alternatives=len(alternatives),
             native_binner_status={s: self.state['stages'][s]['status'] for s in args.binner_list},
             imported_sources=list(args.bin_sources))
+        self.finish('completed')
+        self.message(f'complete: {len(reps)} representatives, {len(alternatives)} alternatives')
+
+    def finish(self, status):
         self.state['checksums'] = self.checksums(p for name in ('1_raw', '2_qc', '3_selection')
                                                for p in (self.out / name).rglob('*'))
         self.verify(self.state['checksums'])
@@ -430,9 +444,8 @@ class Run:
         if not failed:
             shutil.rmtree(self.work)
         # Failed native stages remain available for diagnosis, even if other sources completed.
-        self.state.update(status='completed', completed_at=now(), partial=failed)
+        self.state.update(status=status, completed_at=now(), partial=failed)
         self.save()
-        self.message(f'complete: {len(reps)} representatives, {len(alternatives)} alternatives')
 
 
 def interrupted(signum, frame):
@@ -463,8 +476,11 @@ def run(api, args):
             return
         try:
             task.sources()
-            task.qc()
-            task.export()
+            if args.binning_only == 'T':
+                task.export_binning()
+            else:
+                task.qc()
+                task.export()
         except BaseException as error:
             task.state.update(status='interrupted' if isinstance(error, (KeyboardInterrupt, SystemExit)) else 'failed',
                               error=str(error) or type(error).__name__)
