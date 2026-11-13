@@ -91,21 +91,10 @@ def bin_contigs(run, name, stage, prepared):
         variances = all(run.state['inputs']['variance_available'])
         write_table(coverage, header if variances else ['contigName', *schema.coverage_names],
                     rows if variances else ([key, *values] for key, values in means.items()))
-        labels = stage / 'labels'
-        labels.mkdir()
-        prefix = f'{args.sample}.metabat2'
-        command = ['metabat2', '-i', str(fasta), '-a', str(coverage), '-o', str(labels / prefix),
-                   '-m', length, '--seed', seed, '-t', threads, '--onlyLabel']
+        command = ['metabat2', '-i', str(fasta), '-a', str(coverage),
+                   '-o', str(bins / f'{args.sample}.metabat2'), '-m', length,
+                   '--minClsSize', str(args.min_retain_size), '--seed', seed, '-t', threads]
         run.execute(name, [*command, *([] if variances else ['--cvExt']), *extra], tool=name, cwd=stage)
-        def memberships():
-            for path in sorted(labels.glob(prefix + '.*')):
-                if not path.name[len(prefix) + 1:].isdigit():
-                    continue
-                with path.open() as handle:
-                    for line in handle:
-                        if line.strip():
-                            yield line.split()[0], path.name
-        export_memberships(api, fasta, memberships(), bins, args.min_retain_size)
     elif name == 'remag':
         coverage_args = []
         for i, _ in enumerate(schema.coverage_names):

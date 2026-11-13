@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import IO, Iterable, Optional, Sequence
 
 
-VERSION = "0.41"
+VERSION = "0.42"
 TOOL_NAME = "EukBinPicker"
 CLI_NAME = "eukbinpicker"
 BINNERS = ("remag", "concoct", "metabat2", "vamb")
@@ -33,7 +33,7 @@ MANAGED_BINNER_OPTIONS = {
     "concoct": ("--composition_file", "--coverage_file", "-b", "--basename",
                 "-t", "--threads", "-l", "--length_threshold", "-s", "--seed"),
     "metabat2": ("-i", "--inFile", "-a", "--abdFile", "-o", "--outFile",
-                 "-m", "--minContig", "-t", "--numThreads", "--seed", "--cvExt", "-l", "--onlyLabel", "--noBinOut", "--unbinned", "--saveCls"),
+                 "-m", "--minContig", "-t", "--numThreads", "--seed", "--cvExt", "-s", "--minClsSize", "-l", "--onlyLabel", "--noBinOut", "--unbinned", "--saveCls"),
     "vamb": ("--outdir", "--fasta", "--composition", "--bamfiles", "--bamdir",
              "--abundance_tsv", "--abundance", "-m", "-p", "--seed", "--cuda", "--minfasta"),
 }
@@ -1010,9 +1010,9 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     filtering.add_argument(
         "--min-retain-size",
         type=int,
-        default=100_000,
+        default=200_000,
         metavar="INT",
-        help="minimum retained bin size in bp; 0 disables this filter (default: 100000)",
+        help="minimum retained bin size in bp; 0 disables this filter (default: 200000)",
     )
     filtering.add_argument(
         "--min-selection-size",

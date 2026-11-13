@@ -114,10 +114,11 @@ class WorkflowTests(unittest.TestCase):
     def test_default_retention_is_inclusive_and_zero_keeps_small_imports(self):
         source = self.root / 'sizes'
         source.mkdir()
-        for size in (99999, 100000, 100001):
+        for size in (199999, 200000, 200001):
             (source / f'{size}.fa').write_text(f'>c{size}\n' + 'A' * size + '\n')
+        (source / 'multi.fa').write_text('>a\n' + 'A' * 100000 + '\n>b\n' + 'C' * 100000 + '\n')
         originals = {p.name: p.read_bytes() for p in source.iterdir()}
-        for name, extra, expected in (('out', [], {'100000.fa', '100001.fa'}),
+        for name, extra, expected in (('out', [], {'200000.fa', '200001.fa', 'multi.fa'}),
                                       ('all', ['--min-retain-size', '0'], set(originals))):
             result = self.run_cli('--sample', 's', '--bins', str(source),
                                   '--output', str(self.root / name),
@@ -128,7 +129,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual({p.name: p.read_bytes() for p in source.iterdir()}, originals)
         args = cli.build_parser().parse_args(['--sample', 's', '--bins', str(source),
                                              '--output', str(self.root / 'unused')])
-        self.assertEqual(args.min_retain_size, 100000)
+        self.assertEqual(args.min_retain_size, 200000)
         self.assertEqual(args.min_selection_size, 500000)
 
     def test_vamb_export_uses_retention_minimum_without_changing_clustering(self):

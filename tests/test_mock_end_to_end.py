@@ -139,8 +139,6 @@ elif name == "remag":
         )
         write_fasta(out / "bins" / "remag-bin.fa", binner_records(source, "remag"))
 elif name == "metabat2":
-    if "-s" in args:
-        raise SystemExit("MetaBAT2 native bin minimum overridden")
     if "--help" in args:
         print("MetaBAT 2.18")
     else:
@@ -155,10 +153,10 @@ elif name == "metabat2":
             raise SystemExit("invalid observed variance table")
         source = value("-i")
         prefix = Path(value("-o"))
-        if "--onlyLabel" not in args:
-            raise SystemExit("expected membership-only MetaBAT2 output")
-        Path(str(prefix) + ".1").write_text("".join(
-            identifier + " total_depth=10\n" for identifier, _ in binner_records(source, "metabat2")))
+        if int(value("--minClsSize")) < 0:
+            raise SystemExit("invalid MetaBAT2 minimum bin size")
+        write_fasta(Path(str(prefix) + ".1.fa"), binner_records(source, "metabat2"))
+
 elif name in {
     "concoct",
     "cut_up_fasta.py",

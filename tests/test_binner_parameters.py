@@ -70,7 +70,8 @@ if "--version" not in args and "--help" not in args:
 
     def test_managed_options_and_invalid_parameter_strings_fail_before_output(self):
         cases = (
-            ("remag", "--min-bin-size 1"), ("metabat2", "--onlyLabel"),
+            ("remag", "--min-bin-size 1"), ("metabat2", "--onlyLabel"), ("metabat2", "--minClsSize 100000"),
+            ("metabat2", "-s100000"),
             ("metabat2", "--noBinOut"), ("remag", "--threads=8"), ("remag", "-o/tmp/elsewhere"),
             ("remag", "--coverage other.tsv"), ("remag", "--filter-only"),
             ("concoct", "--length_threshold 500"), ("concoct", "--base=/tmp/elsewhere"),
@@ -93,3 +94,20 @@ if "--version" not in args and "--help" not in args:
             "--eukcc-db", str(self.eukcc_db), "--remag-parameters=--epochs 200")
         self.assertEqual(result.returncode, 2)
         self.assertIn("requires remag in --binners", result.stderr)
+
+    def test_metabat2_receives_default_custom_and_zero_retention(self):
+        for minimum in (0, 200000, 300000):
+            with self.subTest(minimum=minimum):
+                output = self.root / f'metabat-{minimum}'
+                arguments = self.base_run(output)
+                index = arguments.index('--min-retain-size')
+                del arguments[index:index + 2]
+                if minimum != 200000:
+                    arguments += ['--min-retain-size', str(minimum)]
+                result = self.run_cli(*arguments, '--min-selection-size', '500000',
+                                      '--binners', 'metabat2', '--eukcc-db', str(self.eukcc_db))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = json.loads((output / '0_log/run.json').read_text())
+                command = next(c['argv'] for c in record['commands'] if c['stage'] == 'metabat2')
+                self.assertEqual(command[command.index('--minClsSize') + 1], str(minimum))
+                self.assertNotIn('--onlyLabel', command)

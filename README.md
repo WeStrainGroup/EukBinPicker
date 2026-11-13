@@ -17,14 +17,14 @@ EBP integrates [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://
 Install with Conda:
 
 ```bash
-conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.41
+conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.42
 conda activate eukbinpicker
 ```
 
 Or install a tagged release from GitHub with Git and Conda available:
 
 ```bash
-git clone --depth 1 --branch v0.41 https://github.com/WeStrainGroup/EukBinPicker.git
+git clone --depth 1 --branch v0.42 https://github.com/WeStrainGroup/EukBinPicker.git
 cd EukBinPicker
 bash install.sh --prefix "$HOME/conda-envs/eukbinpicker"
 conda activate "$HOME/conda-envs/eukbinpicker"
@@ -137,7 +137,7 @@ Variance is optional; if provided, pair it with the mean columns in the same ord
 
 EBP retains native algorithm defaults, with a shared `--min-input-length` and random seed. MetaBAT2 requires a contig-length threshold of at least 1,500 bp; VAMB requires at least 250 bp. REMAG and CONCOCT use the supplied threshold. Keep `--min-input-length` at 1,500 bp or above when running all four binners. This threshold applies to contigs, whereas `--min-retain-size` applies to whole bins.
 
-EBP applies `--min-retain-size` before writing bin FASTAs: REMAG and VAMB use native export thresholds; CONCOCT and MetaBAT2 use bin membership lists. MetaBAT2 retains its native 200-kb clustering minimum. Setting `--min-retain-size 0` disables the additional retention filter; it does not lower that clustering minimum.
+EBP applies `--min-retain-size` before writing bin FASTAs: REMAG and VAMB use native export thresholds; CONCOCT uses bin membership lists. MetaBAT2 receives the same value through `--minClsSize`, which also affects cluster processing. The default matches MetaBAT2's native setting; `0` is passed through to disable its size cutoff.
 
 REMAG's classifier is skipped because the supplied contigs are expected to have already been identified as eukaryotic. CONCOCT calculates fragment coverage from BAMs, or approximates it from parent-contig means when given tables.
 
@@ -158,7 +158,7 @@ eukbinpicker \
 
 | Parameter | Default | Description |
 | --- | --- | --- |
-| `--min-retain-size` | `100000` | Minimum bin size to retain, in bp (0.1 Mb); `0` disables this filter. |
+| `--min-retain-size` | `200000` | Minimum bin size to retain, in bp; `0` disables this filter. |
 | `--min-selection-size` | `500000` | Minimum bin size entering QC and selection, in bp. |
 | `--qc-tools` | `eukcc` | `eukcc`, `busco`, `eukcc,busco` or `all`. |
 | `--qc-decision` | `eukcc` | Executed QC tool used for filtering and ranking. |
@@ -168,6 +168,8 @@ eukbinpicker \
 | `--max-selection-contamination` | `100` | Maximum contamination or BUSCO proxy, in %. |
 | `--contamination-penalty` | `5` | Contamination penalty in the ranking score. |
 | `--min-overlap` | `0.50` | Overlap threshold between candidates from different sources. |
+
+The retention threshold applies to both newly generated and imported bins. Only whole bins meeting it enter `1_raw/`; imported source files remain unchanged.
 
 All retained bins meeting `--min-selection-size` undergo QC. By default, bins with valid QC estimates enter representative selection under the permissive 0% completeness and 100% contamination thresholds. Use `--min-selection-completeness` and `--max-selection-contamination` to set stricter quality requirements.
 
