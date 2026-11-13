@@ -156,7 +156,7 @@ class Run:
             values = tuple(int(stat[k].replace(',', '')) for k in ('num_seqs', 'sum_len', 'N50', 'max_len'))
             if values != (len(lengths), bp, n50, max(lengths)):
                 raise ValueError(f'SeqKit/FASTA statistics disagree: {path}')
-            if bp < self.args.min_retain_length:
+            if bp < self.args.min_retain_size:
                 continue
             target = destination / (path.name[:-3] if path.name.lower().endswith('.gz') else path.name)
             if path.name.lower().endswith('.gz'):
@@ -293,8 +293,8 @@ class Run:
 
     def qc(self):
         for row in self.state['bins']:
-            if row['bp'] < self.args.min_selection_length:
-                row['qc_status'] = 'below_min_selection_length'
+            if row['bp'] < self.args.min_selection_size:
+                row['qc_status'] = 'below_min_selection_size'
                 continue
             for tool in self.args.qc_list:
                 key = f'{tool}:{row["source"]}/{row["original_bin_id"]}'
@@ -371,7 +371,7 @@ class Run:
         for key, row in by_key.items():
             alt = rejected.get(key)
             reason = ('selected' if key in renamed else alt['reason'] if alt else
-                      'below_min_selection_length' if row['bp'] < args.min_selection_length else
+                      'below_min_selection_size' if row['bp'] < args.min_selection_size else
                       'qc_unassessable' if row.get('qc_status') != 'ok' else 'failed_quality_thresholds')
             matches = alt['matching_representatives'].split(';') if alt else ([key] if key in renamed else [])
             decisions.append(dict(source=row['source'], bin_id=row['original_bin_id'], reason=reason,
@@ -389,7 +389,7 @@ class Run:
         api.write_tsv(self.out / '3_selection/selection.tsv',
             ['source', 'bin_id', 'reason', 'representative', 'overlap', 'shared_bp', 'matching_representatives'], decisions)
         self.state['summary'] = dict(input_mode=args.input_mode, retained_bins=len(rows),
-            qc_candidates=sum(r['bp'] >= args.min_selection_length for r in rows),
+            qc_candidates=sum(r['bp'] >= args.min_selection_size for r in rows),
             representatives=len(reps), alternatives=len(alternatives),
             native_binner_status={s: self.state['stages'][s]['status'] for s in args.binner_list},
             imported_sources=list(args.bin_sources))

@@ -38,7 +38,7 @@ class InstallerTests(unittest.TestCase):
             installer.install(self.prefix, "/mock/conda")
         package = self.prefix / "share/eukbinpicker"
         config = json.loads((package / "installation.json").read_text())
-        self.assertEqual(config["version"], "0.4")
+        self.assertEqual(config["version"], "0.41")
         self.assertFalse((self.prefix.with_name("." + self.prefix.name + ".ebp-install") / "settings.json").exists())
         self.assertFalse((package / "install-cache").exists())
         self.assertTrue((self.prefix / "bin/eukbinpicker").is_file())

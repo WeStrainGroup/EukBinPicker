@@ -118,8 +118,6 @@ if "--version" not in args:
         tool.write_text(tool.read_text().replace('"91", "1"', '"0", "100"'))
         output = self.root / "default-selection"
         args = self.base_run(output)
-        i = args.index("--min-retain-length")
-        del args[i:i + 2]
         result = self.run_cli(*args, "--binners", "metabat2",
                               "--eukcc-db", str(self.eukcc_db))
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -157,14 +155,14 @@ if "--version" not in args:
 
     def test_old_options_are_rejected_and_new_limits_are_checked(self):
         base = self.base_run(self.root / "out")
-        for option in ("--study", "--depth", "--bam", "--decision-qc", "--min-contig-bp",
+        for option in ("--min-retain-length", "--min-selection-length", "--study", "--depth", "--bam", "--decision-qc", "--min-contig-bp",
                        "--retain-min-bin-bp", "--qc-min-bin-bp", "--min-completeness",
                        "--max-contamination", "--overlap-threshold", "--coverage-columns", "--remag-gpu"):
             with self.subTest(option=option), patch("sys.stderr", io.StringIO()):
                 with self.assertRaises(SystemExit):
                     cli.build_parser().parse_args([*base, option, "1"])
-        for option, value in (("--min-retain-length", "-1"),
-                              ("--min-selection-length", "-1"),
+        for option, value in (("--min-retain-size", "-1"),
+                              ("--min-selection-size", "-1"),
                               ("--min-selection-completeness", "nan"),
                               ("--max-selection-contamination", "101"),
                               ("--min-overlap", "0")):

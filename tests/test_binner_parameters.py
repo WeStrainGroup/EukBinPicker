@@ -70,7 +70,8 @@ if "--version" not in args and "--help" not in args:
 
     def test_managed_options_and_invalid_parameter_strings_fail_before_output(self):
         cases = (
-            ("remag", "--threads=8"), ("remag", "-o/tmp/elsewhere"),
+            ("remag", "--min-bin-size 1"), ("metabat2", "--onlyLabel"),
+            ("metabat2", "--noBinOut"), ("remag", "--threads=8"), ("remag", "-o/tmp/elsewhere"),
             ("remag", "--coverage other.tsv"), ("remag", "--filter-only"),
             ("concoct", "--length_threshold 500"), ("concoct", "--base=/tmp/elsewhere"),
             ("metabat2", "-t8"), ("metabat2", "--cvExt"), ("metabat2", "-vt8"),

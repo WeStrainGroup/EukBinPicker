@@ -22,18 +22,18 @@ from pathlib import Path
 from typing import IO, Iterable, Optional, Sequence
 
 
-VERSION = "0.4"
+VERSION = "0.41"
 TOOL_NAME = "EukBinPicker"
 CLI_NAME = "eukbinpicker"
 BINNERS = ("remag", "concoct", "metabat2", "vamb")
 QC_TOOLS = ("eukcc", "busco")
 MANAGED_BINNER_OPTIONS = {
     "remag": ("-f", "--fasta", "-c", "--coverage", "-o", "--output", "-t", "--threads",
-              "--min-contig-length", "--random-seed", "--filter-only", "--force"),
+              "--min-bin-size", "--min-contig-length", "--random-seed", "--filter-only", "--force"),
     "concoct": ("--composition_file", "--coverage_file", "-b", "--basename",
                 "-t", "--threads", "-l", "--length_threshold", "-s", "--seed"),
     "metabat2": ("-i", "--inFile", "-a", "--abdFile", "-o", "--outFile",
-                 "-m", "--minContig", "-t", "--numThreads", "--seed", "--cvExt"),
+                 "-m", "--minContig", "-t", "--numThreads", "--seed", "--cvExt", "-l", "--onlyLabel", "--noBinOut", "--unbinned", "--saveCls"),
     "vamb": ("--outdir", "--fasta", "--composition", "--bamfiles", "--bamdir",
              "--abundance_tsv", "--abundance", "-m", "-p", "--seed", "--cuda", "--minfasta"),
 }
@@ -741,13 +741,13 @@ def validate_args(args: argparse.Namespace) -> None:
     args.qc_list = parse_choices(args.qc_tools, QC_TOOLS, "QC tools")
     if args.qc_decision not in args.qc_list:
         raise UserError("--qc-decision must also occur in --qc-tools")
-    if args.min_retain_length < 0:
-        raise UserError("--min-retain-length must be non-negative")
-    if args.min_selection_length < 0:
-        raise UserError("--min-selection-length must be non-negative")
-    if args.min_selection_length < args.min_retain_length:
+    if args.min_retain_size < 0:
+        raise UserError("--min-retain-size must be non-negative")
+    if args.min_selection_size < 0:
+        raise UserError("--min-selection-size must be non-negative")
+    if args.min_selection_size < args.min_retain_size:
         raise UserError(
-            "--min-selection-length must be >= --min-retain-length"
+            "--min-selection-size must be >= --min-retain-size"
         )
     if not 0.0 < args.min_overlap <= 1.0:
         raise UserError("--min-overlap must be in (0, 1]")
@@ -897,8 +897,8 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
         "max_contamination": args.max_selection_contamination,
         "contamination_penalty": args.contamination_penalty,
         "qc_references": qc_references,
-        "retain_min_bin_bp": args.min_retain_length,
-        "qc_min_bin_bp": args.min_selection_length,
+        "retain_min_bin_bp": args.min_retain_size,
+        "qc_min_bin_bp": args.min_selection_size,
         "min_contig_bp": args.min_input_length,
         "overlap_threshold": args.min_overlap,
     }
@@ -1008,18 +1008,18 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
         help="minimum contig length entering binning, inclusive (default: 1500)",
     )
     filtering.add_argument(
-        "--min-retain-length",
+        "--min-retain-size",
         type=int,
-        default=0,
+        default=100_000,
         metavar="INT",
-        help="additional raw-bin retention minimum in bp; 0 disables this filter; native binner minima still apply (default: 0)",
+        help="minimum retained bin size in bp; 0 disables this filter (default: 100000)",
     )
     filtering.add_argument(
-        "--min-selection-length",
+        "--min-selection-size",
         type=int,
         default=500_000,
         metavar="INT",
-        help="minimum retained-bin length in bp entering QC and representative selection (default: 500000)",
+        help="minimum retained-bin size in bp entering QC and representative selection (default: 500000)",
     )
 
     quality = parser.add_argument_group("quality filtering")

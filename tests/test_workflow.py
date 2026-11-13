@@ -63,7 +63,7 @@ class WorkflowTests(unittest.TestCase):
     def test_bins_only_colliding_names_and_distinct_evidence(self):
         a, b = self.source('a/custom'), self.source('b/custom')
         result = self.run_cli('--sample','sample1','--bins',str(a),str(b),'--output',str(self.root/'out'),
-                              '--min-selection-length','1','--qc-tools','all','--qc-decision','busco',
+                              '--min-retain-size','1','--min-selection-size','1','--qc-tools','all','--qc-decision','busco',
                               '--eukcc-db',str(self.eukcc_db),'--busco-db',str(self.busco_db))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.state()['summary']['imported_sources'], ['custom','custom_2'])
@@ -103,13 +103,55 @@ class WorkflowTests(unittest.TestCase):
         a=self.source()
         self.source('previous','small.fa','>small\nACGT\n')
         result=self.run_cli('--sample','sample1','--bins',str(a),'--output',str(self.root/'out'),
-                            '--min-retain-length','5','--min-selection-length','301','--eukcc-db',str(self.eukcc_db))
+                            '--min-retain-size','5','--min-selection-size','301','--eukcc-db',str(self.eukcc_db))
         self.assertEqual(result.returncode,0,result.stderr)
         rows=self.table('2_qc/summary.tsv')
         self.assertEqual(len(rows),1)
-        self.assertEqual(rows[0]['qc_status'],'below_min_selection_length')
-        self.assertEqual(self.table('3_selection/selection.tsv')[0]['reason'],'below_min_selection_length')
+        self.assertEqual(rows[0]['qc_status'],'below_min_selection_size')
+        self.assertEqual(self.table('3_selection/selection.tsv')[0]['reason'],'below_min_selection_size')
         self.assertEqual(self.state()['summary']['representatives'],0)
+
+    def test_default_retention_is_inclusive_and_zero_keeps_small_imports(self):
+        source = self.root / 'sizes'
+        source.mkdir()
+        for size in (99999, 100000, 100001):
+            (source / f'{size}.fa').write_text(f'>c{size}\n' + 'A' * size + '\n')
+        originals = {p.name: p.read_bytes() for p in source.iterdir()}
+        for name, extra, expected in (('out', [], {'100000.fa', '100001.fa'}),
+                                      ('all', ['--min-retain-size', '0'], set(originals))):
+            result = self.run_cli('--sample', 's', '--bins', str(source),
+                                  '--output', str(self.root / name),
+                                  '--eukcc-db', str(self.eukcc_db), *extra)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            retained = self.root / name / '1_raw/sizes'
+            self.assertEqual({p.name for p in retained.iterdir()}, expected)
+        self.assertEqual({p.name: p.read_bytes() for p in source.iterdir()}, originals)
+        args = cli.build_parser().parse_args(['--sample', 's', '--bins', str(source),
+                                             '--output', str(self.root / 'unused')])
+        self.assertEqual(args.min_retain_size, 100000)
+        self.assertEqual(args.min_selection_size, 500000)
+
+    def test_vamb_export_uses_retention_minimum_without_changing_clustering(self):
+        from binners import bin_contigs
+        from depth_schema import identify_depth_schema
+        schema = identify_depth_schema(['contigName', 'contigLen', 'totalAvgDepth', 'A', 'A-var'], 's', require_jgi=True)
+        for minimum, expected in ((0, '1'), (100000, '100000')):
+            stage = self.root / f'export-{minimum}'
+            stage.mkdir()
+            commands = []
+            def execute(label, command, **kwargs):
+                commands.append(command)
+                (Path(command[command.index('--outdir') + 1]) / 'bins').mkdir(parents=True)
+            args = types.SimpleNamespace(binner_parameters={'vamb': []}, min_input_length=1500,
+                min_retain_size=minimum, threads=4, random_seed=6311, gpu='F')
+            api = types.SimpleNamespace(SCRIPTS=self.root, executable=lambda *args: 'vamb')
+            run = types.SimpleNamespace(args=args, api=api, execute=execute, state={'stages': {'vamb': {}}})
+            rows = [['c1', '2000', '1', '1', '0'], ['c2', '2000', '2', '2', '0']]
+            bin_contigs(run, 'vamb', stage, (self.fasta, [], schema, rows))
+            command = commands[0]
+            self.assertEqual(command[command.index('--minfasta') + 1], expected)
+            self.assertEqual(command[command.index('-m') + 1], '1500')
+            self.assertEqual(command[command.index('--seed') + 1], '6311')
 
     def test_partial_binner_failure_preserves_successful_sources(self):
         result=self.run_cli(*self.arguments('concoct,metabat2'))
@@ -223,7 +265,7 @@ class WorkflowTests(unittest.TestCase):
     def test_invalid_native_bin_does_not_leak_into_public_candidates(self):
         a=self.source()
         p=self.tools/'metabat2'
-        p.write_text(p.read_text().replace('binner_records(source, "metabat2"),', '[("foreign", "AAAA")],'))
+        p.write_text(p.read_text().replace('binner_records(source, "metabat2")', '[("foreign", "AAAA")]'))
         result=self.run_cli(*self.arguments('metabat2'),'--bins',str(a))
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(self.state()['summary']['native_binner_status'],{'metabat2':'failed'})

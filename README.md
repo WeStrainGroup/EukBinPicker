@@ -17,14 +17,14 @@ EBP integrates [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://
 Install with Conda:
 
 ```bash
-conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.4
+conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.41
 conda activate eukbinpicker
 ```
 
 Or install a tagged release from GitHub with Git and Conda available:
 
 ```bash
-git clone --depth 1 --branch v0.4 https://github.com/WeStrainGroup/EukBinPicker.git
+git clone --depth 1 --branch v0.41 https://github.com/WeStrainGroup/EukBinPicker.git
 cd EukBinPicker
 bash install.sh --prefix "$HOME/conda-envs/eukbinpicker"
 conda activate "$HOME/conda-envs/eukbinpicker"
@@ -135,7 +135,9 @@ Variance is optional; if provided, pair it with the mean columns in the same ord
 | `--metabat2-parameters` | — | Quoted native MetaBAT2 options. |
 | `--vamb-parameters` | — | Quoted native VAMB options. |
 
-EBP retains native algorithm defaults, with a shared `--min-input-length` and random seed. MetaBAT2 requires a contig-length threshold of at least 1,500 bp; VAMB requires at least 250 bp. REMAG and CONCOCT use the supplied threshold. Keep `--min-input-length` at 1,500 bp or above when running all four binners. This threshold applies to contigs, whereas `--min-retain-length` applies to whole bins.
+EBP retains native algorithm defaults, with a shared `--min-input-length` and random seed. MetaBAT2 requires a contig-length threshold of at least 1,500 bp; VAMB requires at least 250 bp. REMAG and CONCOCT use the supplied threshold. Keep `--min-input-length` at 1,500 bp or above when running all four binners. This threshold applies to contigs, whereas `--min-retain-size` applies to whole bins.
+
+EBP applies `--min-retain-size` before writing bin FASTAs: REMAG and VAMB use native export thresholds; CONCOCT and MetaBAT2 use bin membership lists. MetaBAT2 retains its native 200-kb clustering minimum. Setting `--min-retain-size 0` disables the additional retention filter; it does not lower that clustering minimum.
 
 REMAG's classifier is skipped because the supplied contigs are expected to have already been identified as eukaryotic. CONCOCT calculates fragment coverage from BAMs, or approximates it from parent-contig means when given tables.
 
@@ -156,8 +158,8 @@ eukbinpicker \
 
 | Parameter | Default | Description |
 | --- | --- | --- |
-| `--min-retain-length` | `0` | Additional bin-retention minimum, in bp; `0` disables it. |
-| `--min-selection-length` | `500000` | Minimum bin length entering QC and selection, in bp. |
+| `--min-retain-size` | `100000` | Minimum bin size to retain, in bp (0.1 Mb); `0` disables this filter. |
+| `--min-selection-size` | `500000` | Minimum bin size entering QC and selection, in bp. |
 | `--qc-tools` | `eukcc` | `eukcc`, `busco`, `eukcc,busco` or `all`. |
 | `--qc-decision` | `eukcc` | Executed QC tool used for filtering and ranking. |
 | `--eukcc-db` | — | Unpacked EukCC database; required when EukCC is selected. |
@@ -167,7 +169,7 @@ eukbinpicker \
 | `--contamination-penalty` | `5` | Contamination penalty in the ranking score. |
 | `--min-overlap` | `0.50` | Overlap threshold between candidates from different sources. |
 
-All retained bins meeting `--min-selection-length` undergo QC. By default, bins with valid QC estimates enter representative selection under the permissive 0% completeness and 100% contamination thresholds. Use `--min-selection-completeness` and `--max-selection-contamination` to set stricter quality requirements.
+All retained bins meeting `--min-selection-size` undergo QC. By default, bins with valid QC estimates enter representative selection under the permissive 0% completeness and 100% contamination thresholds. Use `--min-selection-completeness` and `--max-selection-contamination` to set stricter quality requirements.
 
 To rank with BUSCO, include it in `--qc-tools` and set `--qc-decision busco`. BUSCO's duplicated percentage is used as a contamination proxy.
 
@@ -180,7 +182,7 @@ To rank with BUSCO, include it in `--qc-tools` and set `--qc-decision busco`. BU
 
 ## How selection works
 
-Candidates passing the length and QC thresholds are ranked by:
+Candidates passing the size and QC thresholds are ranked by:
 
 ```txt
 score = completeness − contamination_penalty × contamination
@@ -191,7 +193,7 @@ Ties are resolved by higher completeness, lower contamination, fewer contigs, hi
 EBP considers candidates in descending quality order. If a candidate overlaps an already selected, higher-ranked bin from a different source within the same assembly, and the overlap reaches `--min-overlap` (default: 0.50), that selected bin represents the candidate. Otherwise, the candidate is retained as another representative.
 
 ```txt
-overlap(A, B) = shared_contig_bp / min(length(A), length(B))
+overlap(A, B) = shared_contig_bp / min(size(A), size(B))
 ```
 
 A source is one native binner or one imported directory. Bins within a source are not compared. Shared contigs must match in original ID and normalized sequence; overlap is a proxy for competing reconstructions, not a taxonomic identity test. EBP preserves complete candidate bins without merging, splitting or refinement.
@@ -224,7 +226,7 @@ sample_1_ebp/
 
 Final bins are numbered in selection order. `representatives.tsv` maps each new ID to its source, original bin ID and filename, and includes quality metrics, shared-contig statistics and represented candidates. `selection.tsv` records why each candidate was selected or excluded, its assigned representative and any additional matching representatives. Candidate references use `source/bin_id`.
 
-QC evidence is grouped by source and bin; only the requested QC tools are included. `summary.tsv` distinguishes bins below the QC length threshold, unassessable bins and valid quality estimates.
+QC evidence is grouped by source and bin; only the requested QC tools are included. `summary.tsv` distinguishes bins below the QC size threshold, unassessable bins and valid quality estimates.
 
 `run.json` records workflow status, per-stage outcomes, actual commands and checksums. A completed run may contain failed native binners; check `partial` and `summary.native_binner_status`. Valid imported bins can still be selected if native binning fails or no contigs pass the input-length threshold.
 

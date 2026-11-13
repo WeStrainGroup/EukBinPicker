@@ -45,6 +45,37 @@ def write_table(path, header, rows):
         writer.writerows(rows)
 
 
+def export_memberships(api, fasta, memberships, bins, minimum):
+    """Write only whole bins meeting the size cutoff; keep original contig records."""
+    lengths = api.fasta_lengths(fasta)
+    assignments, sizes = {}, {}
+    for contig, group in memberships:
+        if contig not in lengths:
+            raise ValueError(f'unknown contig in bin membership: {contig}')
+        if contig in assignments:
+            raise ValueError(f'duplicate contig in bin membership: {contig}')
+        if not group or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-' for c in group) or group in {'.', '..'}:
+            raise ValueError(f'invalid bin name: {group!r}')
+        assignments[contig] = group
+        sizes[group] = sizes.get(group, 0) + lengths[contig]
+    selected = {group for group, size in sizes.items() if size >= minimum}
+    # One open output at a time; no sequence cache or files for discarded bins.
+    output = None
+    try:
+        with api.open_text(fasta) as source:
+            for line in source:
+                if line.startswith('>'):
+                    if output is not None:
+                        output.close()
+                    group = assignments.get(line[1:].split()[0])
+                    output = (bins / f'{group}.fa').open('a') if group in selected else None
+                if output is not None:
+                    output.write(line)
+    finally:
+        if output is not None:
+            output.close()
+
+
 def bin_contigs(run, name, stage, prepared):
     args, api = run.args, run.api
     fasta, header, schema, rows = prepared
@@ -60,9 +91,21 @@ def bin_contigs(run, name, stage, prepared):
         variances = all(run.state['inputs']['variance_available'])
         write_table(coverage, header if variances else ['contigName', *schema.coverage_names],
                     rows if variances else ([key, *values] for key, values in means.items()))
-        command = ['metabat2', '-i', str(fasta), '-a', str(coverage), '-o', str(bins / f'{args.sample}.metabat2'),
-                   '-m', length, '--seed', seed, '-t', threads]
+        labels = stage / 'labels'
+        labels.mkdir()
+        prefix = f'{args.sample}.metabat2'
+        command = ['metabat2', '-i', str(fasta), '-a', str(coverage), '-o', str(labels / prefix),
+                   '-m', length, '--seed', seed, '-t', threads, '--onlyLabel']
         run.execute(name, [*command, *([] if variances else ['--cvExt']), *extra], tool=name, cwd=stage)
+        def memberships():
+            for path in sorted(labels.glob(prefix + '.*')):
+                if not path.name[len(prefix) + 1:].isdigit():
+                    continue
+                with path.open() as handle:
+                    for line in handle:
+                        if line.strip():
+                            yield line.split()[0], path.name
+        export_memberships(api, fasta, memberships(), bins, args.min_retain_size)
     elif name == 'remag':
         coverage_args = []
         for i, _ in enumerate(schema.coverage_names):
@@ -72,6 +115,7 @@ def bin_contigs(run, name, stage, prepared):
         command = ['python' if api.environment_value('REMAG_ENV') else sys.executable,
                    str(api.SCRIPTS / 'run_remag.py'), '--gpu', args.gpu, '--', 'remag', str(fasta),
                    *coverage_args, '-o', str(stage), '--skip-bacterial-filter',
+                   '--min-bin-size', str(max(1, args.min_retain_size)),
                    '--min-contig-length', length, '--random-seed', seed, '-t', threads, *extra]
         run.execute(name, command, tool=name, cwd=stage)
     elif name == 'concoct':
@@ -99,8 +143,13 @@ def bin_contigs(run, name, stage, prepared):
         merged = stage / 'clustering_merged.csv'
         run.execute(name, ['merge_cutup_clustering.py', str(native / f'clustering_gt{threshold}.csv')],
                     tool=name, cwd=stage, stdout=merged)
-        run.execute(name, ['extract_fasta_bins.py', str(fasta), str(merged), '--output_path', str(bins)],
-                    tool=name, cwd=stage)
+        with merged.open() as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames != ['contig_id', 'cluster_id']:
+                raise ValueError('invalid CONCOCT membership header')
+            export_memberships(api, fasta,
+                               ((row['contig_id'], str(int(row['cluster_id']))) for row in reader),
+                               bins, args.min_retain_size)
     elif name == 'vamb':
         indices = [i for i in range(len(schema.coverage_names)) if any(float(v[i]) > 0 for v in means.values())]
         if not indices:
@@ -114,7 +163,7 @@ def bin_contigs(run, name, stage, prepared):
         command = [sys.executable, str(api.SCRIPTS / 'run_seeded_vamb.py'), '--seed', seed, '--',
                    api.executable('vamb', 'VAMB'), 'bin', 'default', '--outdir', str(native),
                    '--fasta', str(fasta), '--abundance_tsv', str(coverage), '-m', length,
-                   '-p', threads, '--seed', seed, '--minfasta', '1', *(['--cuda'] if args.gpu == 'T' else []), *extra]
+                   '-p', threads, '--seed', seed, '--minfasta', str(max(1, args.min_retain_size)), *(['--cuda'] if args.gpu == 'T' else []), *extra]
         socket_root = Path('/dev/shm') if Path('/dev/shm').is_dir() else stage
         with tempfile.TemporaryDirectory(prefix='eukbin-', dir=socket_root) as socket_dir:
             run.execute(name, command, cwd=stage, env={'TMPDIR': socket_dir, 'TMP': socket_dir, 'TEMP': socket_dir})

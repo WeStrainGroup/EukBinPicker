@@ -104,14 +104,14 @@ elif name == "seqkit":
                 break
         print(f"{Path(raw_path).resolve()}\t{len(lengths)}\t{total}\t{n50}\t{max(lengths)}")
 elif name == "remag":
-    if "--min-bin-size" in args or "-m" in args:
-        raise SystemExit("ReMAG native defaults overridden")
     if "--version" in args:
         print("remag 0.4.4")
     else:
         expected_seed = os.environ.get("MOCK_EXPECTED_SEED")
         if expected_seed is not None and value("--random-seed") != expected_seed:
             raise SystemExit("unexpected ReMAG random seed")
+        if int(value("--min-bin-size")) < 1:
+            raise SystemExit("invalid REMAG export threshold")
         source = args[0]
         out = Path(value("-o"))
         coverage_files = [
@@ -155,10 +155,10 @@ elif name == "metabat2":
             raise SystemExit("invalid observed variance table")
         source = value("-i")
         prefix = Path(value("-o"))
-        write_fasta(
-            Path(str(prefix) + ".1.fa"),
-            binner_records(source, "metabat2"),
-        )
+        if "--onlyLabel" not in args:
+            raise SystemExit("expected membership-only MetaBAT2 output")
+        Path(str(prefix) + ".1").write_text("".join(
+            identifier + " total_depth=10\n" for identifier, _ in binner_records(source, "metabat2")))
 elif name in {
     "concoct",
     "cut_up_fasta.py",
@@ -404,9 +404,9 @@ class MockEndToEndTests(unittest.TestCase):
             str(self.depth),
             "--output",
             str(output),
-            "--min-retain-length",
+            "--min-retain-size",
             "1",
-            "--min-selection-length",
+            "--min-selection-size",
             "1",
             "--min-input-length",
             "1",
