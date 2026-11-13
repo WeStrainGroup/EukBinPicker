@@ -6,7 +6,7 @@ Recover eukaryotic genome bins with complementary binning methods.
 
 Genome-resolved metagenomics helps reveal eukaryotic diversity and function, but genome recovery remains challenging. A typical workflow assembles quality-controlled reads, maps reads to the complete assembly, and identifies eukaryotic contigs with [EukContigMiner](https://github.com/WeStrainGroup/EukContigMiner) or similar tools. These contigs and their coverage profiles are then used to recover eukaryotic MAGs.
 
-The binning performance of existing tools varies across samples and environments. Following the complementary-binner rationale of [DAS Tool](https://github.com/cmks/DAS_Tool), EukBinPicker (EBP) evaluates candidate bins from multiple sources and selects representatives based on quality estimates and shared contigs.
+Binning performance varies across samples and environments. Following the complementary-binner rationale of [DAS Tool](https://github.com/cmks/DAS_Tool), EukBinPicker (EBP) evaluates candidate bins from multiple sources and selects representatives based on quality estimates and shared contigs.
 
 EBP integrates [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://bitbucket.org/berkeleylab/metabat/), [VAMB](https://github.com/RasmussenLab/vamb) and [REMAG](https://github.com/danielzmbp/remag), which use contig sequences and coverage without requiring additional information, such as prokaryotic marker genes or taxonomic assignments, for binning. It also accepts existing bin sets, alone or alongside new binning. All candidates undergo the same quality assessment and selection workflow.
 
@@ -45,7 +45,7 @@ eukbinpicker \
   --output sample_1_ebp
 ```
 
-Select representative bins from existing bin sets.
+Select representative bins from existing bin sets for the same assembly.
 
 ```bash
 eukbinpicker \
@@ -86,7 +86,9 @@ Default values are shown below. **—** means no preset value; input requirement
 | `--cov-variance-column` | — | Comma-separated variance columns, paired with means. |
 | `--output` | — | Required output directory. |
 
-Use coverage from one or more samples mapped to the same complete assembly. EBP extracts the rows matching the supplied eukaryotic FASTA; all its contigs must have coverage entries. Zero coverage is valid, but missing entries are not.
+Use `--contigs` with `--coverage` for new binning, `--bins` for existing bin sets, or both. All inputs should come from the same assembly and retain the original contig IDs.
+
+For new binning, map reads to the complete assembly. EBP extracts coverage entries matching the supplied eukaryotic FASTA; every contig must have an entry. Zero coverage is valid, but missing entries are not. Supply either BAMs or coverage tables in one run.
 
 **BAM input.** Pass `--coverage sample_A.bam sample_B.bam`. Use coordinate-sorted, indexed BAMs with unique basenames and the same reference IDs, lengths and order. For example, map one sample's clean paired-end reads with Bowtie2 and prepare the BAM with SAMtools:
 
@@ -105,8 +107,8 @@ For additional samples, repeat the mapping, sorting and indexing with the same a
 
 ```bash
 jgi_summarize_bam_contig_depths \
---outputDepth assembly_depth.tsv \
-sample_A.bam sample_B.bam
+  --outputDepth assembly_depth.tsv \
+  sample_A.bam sample_B.bam
 ```
 
 Pass `--coverage assembly_depth.tsv`; EBP recognizes the [JGI format](https://bitbucket.org/berkeleylab/metabat/src/master/) automatically. For single-sample coverage, use one BAM.
@@ -115,8 +117,8 @@ Pass `--coverage assembly_depth.tsv`; EBP recognizes the [JGI format](https://bi
 
 ```bash
 --cov-contig-column sequence_id \
---cov-mean-column A_mean,B_mean \
---cov-variance-column A_var,B_var
+  --cov-mean-column A_mean,B_mean \
+  --cov-variance-column A_var,B_var
 ```
 
 Variance is optional; if provided, pair it with the mean columns in the same order. Only MetaBAT2 uses variance, requiring it for all samples or none; mean-only input uses its native `--cvExt` mode. The other three binners use mean coverage.
@@ -127,21 +129,24 @@ Variance is optional; if provided, pair it with the mean columns in the same ord
 | --- | --- | --- |
 | `--min-input-length` | `1500` | Minimum contig length for binning, in bp; imported bins remain intact. |
 | `--binners` | `all` | All four tools or a comma-separated subset of `remag,concoct,metabat2,vamb`. |
-| `--threads` | `4` | Threads supplied to each tool. |
-| `--random-seed` | `6311` | Shared positive seed for binning. |
-| `--gpu` | `F` | `T`: CUDA for selected REMAG/VAMB; other tools remain on CPU. `F`: CPU for all tools. |
+| `--min-retain-size` | `200000` | Minimum bin size to retain, in bp; `0` disables this filter. |
 | `--remag-parameters` | — | Quoted native REMAG options. |
 | `--concoct-parameters` | — | Quoted native CONCOCT options. |
 | `--metabat2-parameters` | — | Quoted native MetaBAT2 options. |
 | `--vamb-parameters` | — | Quoted native VAMB options. |
+| `--threads` | `4` | Threads supplied to each tool. |
+| `--gpu` | `F` | `T`: CUDA for selected REMAG/VAMB; other tools remain on CPU. `F`: CPU for all tools. |
+| `--random-seed` | `6311` | Shared positive seed for binning. |
 
-EBP retains native algorithm defaults, with a shared `--min-input-length` and random seed. MetaBAT2 requires a contig-length threshold of at least 1,500 bp; VAMB requires at least 250 bp. REMAG and CONCOCT use the supplied threshold. Keep `--min-input-length` at 1,500 bp or above when running all four binners. This threshold applies to contigs, whereas `--min-retain-size` applies to whole bins.
+EBP uses native algorithm defaults unless overridden, with shared contig-length, bin-size and random-seed settings. `--min-input-length` filters contigs for new binning; imported bins are not trimmed. MetaBAT2 requires at least 1,500 bp and VAMB at least 250 bp, so use 1,500 bp or above when running all four binners.
 
-EBP applies `--min-retain-size` before writing bin FASTAs: REMAG and VAMB use native export thresholds; CONCOCT uses bin membership lists. MetaBAT2 receives the same value through `--minClsSize`, which also affects cluster processing. The default matches MetaBAT2's native setting; `0` is passed through to disable its size cutoff.
+`--min-retain-size` applies to the total size of each bin, including imported bins. Only whole bins meeting this threshold enter `1_raw/`; imported source files remain unchanged.
+
+For new binning, EBP applies this cutoff before FASTA export. REMAG and VAMB use native export thresholds, and CONCOCT filters bin memberships. MetaBAT2 receives the value as `--minClsSize`, which also affects cluster processing; the default matches its native 200,000-bp setting.
 
 REMAG's classifier is skipped because the supplied contigs are expected to have already been identified as eukaryotic. CONCOCT calculates fragment coverage from BAMs, or approximates it from parent-contig means when given tables.
 
-To customize a binner, pass native options in one quoted string:
+To customize a binner, pass native options in one quoted string. Use EBP options for input/output paths and shared settings:
 
 ```bash
 eukbinpicker \
@@ -158,7 +163,6 @@ eukbinpicker \
 
 | Parameter | Default | Description |
 | --- | --- | --- |
-| `--min-retain-size` | `200000` | Minimum bin size to retain, in bp; `0` disables this filter. |
 | `--min-selection-size` | `500000` | Minimum bin size entering QC and selection, in bp. |
 | `--qc-tools` | `eukcc` | `eukcc`, `busco`, `eukcc,busco` or `all`. |
 | `--qc-decision` | `eukcc` | Executed QC tool used for filtering and ranking. |
@@ -169,9 +173,7 @@ eukbinpicker \
 | `--contamination-penalty` | `5` | Contamination penalty in the ranking score. |
 | `--min-overlap` | `0.50` | Overlap threshold between candidates from different sources. |
 
-The retention threshold applies to both newly generated and imported bins. Only whole bins meeting it enter `1_raw/`; imported source files remain unchanged.
-
-All retained bins meeting `--min-selection-size` undergo QC. By default, bins with valid QC estimates enter representative selection under the permissive 0% completeness and 100% contamination thresholds. Use `--min-selection-completeness` and `--max-selection-contamination` to set stricter quality requirements.
+Retained bins meeting `--min-selection-size` undergo QC. Only bins with valid estimates that meet the completeness and contamination thresholds enter selection. The defaults of 0% completeness and 100% contamination are permissive; use `--min-selection-completeness` and `--max-selection-contamination` to set stricter requirements.
 
 To rank with BUSCO, include it in `--qc-tools` and set `--qc-decision busco`. BUSCO's duplicated percentage is used as a contamination proxy.
 
@@ -190,15 +192,15 @@ Candidates passing the size and QC thresholds are ranked by:
 score = completeness − contamination_penalty × contamination
 ```
 
-Ties are resolved by higher completeness, lower contamination, fewer contigs, higher N50, then lexicographic order of `source__bin_id`.
-
-EBP considers candidates in descending quality order. If a candidate overlaps an already selected, higher-ranked bin from a different source within the same assembly, and the overlap reaches `--min-overlap` (default: 0.50), that selected bin represents the candidate. Otherwise, the candidate is retained as another representative.
+EBP considers candidates in ranked order. If the overlap with an already selected bin from a different source reaches `--min-overlap` (default: 0.50), the candidate is excluded and assigned to that representative. Otherwise, it is selected as a new representative.
 
 ```txt
 overlap(A, B) = shared_contig_bp / min(size(A), size(B))
 ```
 
-A source is one native binner or one imported directory. Bins within a source are not compared. Shared contigs must match in original ID and normalized sequence; overlap is a proxy for competing reconstructions, not a taxonomic identity test. EBP preserves complete candidate bins without merging, splitting or refinement.
+Bin size is the total length of its contigs, in bp. A source is one native binner or one imported directory. Bins within a source are not compared. Shared contigs must match in original ID and normalized sequence; overlap is a proxy for competing reconstructions, not a taxonomic identity test. EBP preserves complete candidate bins without merging, splitting or refinement.
+
+Ties are resolved by higher completeness, lower contamination, fewer contigs, higher N50, then lexicographic order of `source__bin_id`.
 
 ## Outputs
 
@@ -232,7 +234,7 @@ QC evidence is grouped by source and bin; only the requested QC tools are includ
 
 `run.json` records workflow status, per-stage outcomes, actual commands and checksums. A completed run may contain failed native binners; check `partial` and `summary.native_binner_status`. Valid imported bins can still be selected if native binning fails or no contigs pass the input-length threshold.
 
-Temporary files are limited to `.work/`. Each completed stage releases its working files after its results have been checked; failed-stage files are retained for diagnosis. After an interrupted or failed run, repeat the same command to reuse verified completed stages and rerun unfinished stages. Reuse requires matching inputs, parameters, software and intact results. Use a new output directory when these change, including when upgrading from an earlier version.
+Working files stay in `.work/`. Completed stages remove them after output verification; failed stages retain them for diagnosis. To resume an interrupted or failed run, repeat the same command. EBP reuses verified completed stages and reruns unfinished ones. Use a new output directory if inputs, parameters or software change, including after an upgrade.
 
 ## Contact
 
