@@ -48,7 +48,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(state['summary']['representatives'], 1)
         reps = self.table('3_selection/representatives.tsv')
         self.assertEqual(reps[0]['bin_id'], 'bin_1')
-        self.assertEqual(reps[0]['source'], 'metabat2')
+        # All four mock FASTAs are byte-identical: shared QC now reaches the source-ID tie-break.
+        self.assertEqual(reps[0]['source'], 'concoct')
         self.assertEqual((out/'3_selection/bins/bin_1.fa').read_bytes(), self.fasta.read_bytes())
         self.assertEqual(len(self.table('3_selection/selection.tsv')), 4)
         self.assertEqual({r['representative'] for r in self.table('3_selection/selection.tsv')}, {'bin_1'})
@@ -182,7 +183,8 @@ class WorkflowTests(unittest.TestCase):
 
     def test_failed_qc_resumes_without_rerunning_completed_work(self):
         self.environment['MOCK_FAIL_QC_SOURCE']='previous'
-        a=self.source()
+        # A distinct candidate exercises failure recovery rather than exact-FASTA reuse.
+        a=self.source(text=self.fasta.read_text().split('>c3')[0])
         args=[*self.arguments('metabat2'),'--bins',str(a)]
         result=self.run_cli(*args)
         self.assertNotEqual(result.returncode,0)

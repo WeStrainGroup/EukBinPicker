@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.42"
+VERSION = "0.43"
 SOURCE = Path(__file__).resolve().parents[1]
 
 

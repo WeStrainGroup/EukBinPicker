@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import IO, Iterable, Optional, Sequence
 
 
-VERSION = "0.42"
+VERSION = "0.43"
 TOOL_NAME = "EukBinPicker"
 CLI_NAME = "eukbinpicker"
 BINNERS = ("remag", "concoct", "metabat2", "vamb")
@@ -241,12 +241,12 @@ def _nonnegative_depth_value(
     return parsed
 
 
-def normalized_depth_inputs(
+def normalized_depth_rows(
     inputs: Sequence[DepthInput],
     contig_lengths: OrderedDict[str, int],
     sample: str,
     **column_options,
-) -> tuple[str, dict[str, object]]:
+) -> tuple[list[str], list[list[str]], dict[str, object]]:
     """Select FASTA IDs from full-assembly tables, preserving means/variances."""
 
     if not inputs:
@@ -462,7 +462,7 @@ def normalized_depth_inputs(
     header_fields = ["contigName", "contigLen", "totalAvgDepth"]
     for name in coverage_names:
         header_fields.extend((name, f"{name}-var"))
-    lines = ["\t".join(header_fields) + "\n"]
+    rows = []
     for identifier, length in contig_lengths.items():
         if preserved_total is not None:
             total_text = preserved_total[identifier]
@@ -476,14 +476,14 @@ def normalized_depth_inputs(
             combined_variances[identifier],
         ):
             fields.extend((value, variance))
-        lines.append("\t".join(fields) + "\n")
+        rows.append(fields)
 
     total_policy = (
         "provided"
         if preserved_total is not None
         else "sum_of_coverage_columns"
     )
-    return "".join(lines), {
+    return header_fields, rows, {
         "contigs": len(contig_lengths),
         "bp": sum(contig_lengths.values()),
         "extra_depth_rows_ignored": extra_rows,
@@ -495,6 +495,13 @@ def normalized_depth_inputs(
         "variance_available": variance_available,
         "total_avg_depth_policy": total_policy,
     }
+
+
+def normalized_depth_inputs(inputs, contig_lengths, sample, **column_options):
+    """Text adapter for callers that need a serialized table."""
+    header, rows, summary = normalized_depth_rows(inputs, contig_lengths, sample, **column_options)
+    text = "\t".join(header) + "\n" + "".join("\t".join(row) + "\n" for row in rows)
+    return text, summary
 
 
 def normalized_depth_text(
@@ -789,7 +796,12 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
     depth_inputs = parse_depth_inputs(args.depth) if args.depth else ()
     from import_bins import inspect_bin_sets
     bin_inputs, imported_lengths = inspect_bin_sets(args.bin_sources)
+    # Keep validated data only in this invocation, never in run.json or a disk cache.
+    paths = ([contigs] if args.coverage else []) + [item.path for item in depth_inputs]
+    args._input_states = {p: (p.stat().st_size, p.stat().st_mtime_ns) for p in paths}
+    args._normalized_depth = None
     lengths = fasta_lengths(contigs, allow_empty=True) if args.coverage else imported_lengths
+    args._contig_lengths = lengths
     eligible_lengths = OrderedDict(
         (identifier, length)
         for identifier, length in lengths.items()
@@ -798,7 +810,7 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
     bam_summary = {}
     if not args.coverage:
         eligible_lengths = lengths
-        depth_text = None
+        depth_bytes = None
         depth_summary = dict(contigs=0, depth_source_count=0, depth_sources=[],
                              coverage_source_columns=[], coverage_columns=[],
                              coverage_column_count=0, variance_available=[],
@@ -811,14 +823,17 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
             note("BAM reference M5 is absent for some contigs: ID/length checked; "
                  "you must ensure the FASTA comes from the mapped assembly")
         names = [Path(item["path"]).stem for item in bam_summary["bam_inputs"]]
-        depth_text = None
+        depth_bytes = None
         depth_summary = dict(contigs=len(lengths), depth_source_count=0, depth_sources=[],
                              coverage_source_columns=names, coverage_columns=names,
                              coverage_column_count=len(names), variance_available=[True]*len(names),
                              total_avg_depth_policy="native_JGI")
     else:
-        depth_text, depth_summary = normalized_depth_inputs(
+        header, rows, depth_summary = normalized_depth_rows(
             depth_inputs, lengths, args.sample, **depth_column_options(args))
+        args._normalized_depth = (header, rows)
+        depth_bytes = len("\t".join(header).encode("utf-8")) + 1
+        depth_bytes += sum(sum(len(value.encode("utf-8")) for value in row) + len(row) for row in rows)
         variance = depth_summary["variance_available"]
         if "metabat2" in args.binner_list and any(variance) and not all(variance):
             raise UserError("MetaBAT2 cannot mix observed and missing variance; "
@@ -865,7 +880,7 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, object]:
         "eligible_contigs": len(eligible_lengths),
         "eligible_bp": sum(eligible_lengths.values()),
         "depth_rows": depth_summary["contigs"],
-        "normalized_depth_bytes": len(depth_text.encode("utf-8")) if depth_text is not None else None,
+        "normalized_depth_bytes": depth_bytes,
         "input_mode": args.input_mode,
         "bin_inputs": bin_inputs if args.bins else [],
         "coverage_input": ("bam" if args.bam else "table") if args.coverage else None,

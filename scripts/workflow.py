@@ -35,7 +35,8 @@ class Run:
         self.last_output = ''
         self.state = {}
         self.env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONHASHSEED=str(args.random_seed),
-                        OMP_NUM_THREADS=str(args.threads), MKL_NUM_THREADS=str(args.threads))
+                        OMP_NUM_THREADS=str(args.threads), MKL_NUM_THREADS=str(args.threads),
+                        OPENBLAS_NUM_THREADS=str(args.threads), NUMEXPR_NUM_THREADS=str(args.threads))
         if args.gpu == 'F':
             self.env['CUDA_VISIBLE_DEVICES'] = ''
 
@@ -61,7 +62,9 @@ class Run:
                            XDG_CACHE_HOME=str(cache), MPLCONFIGDIR=str(cache / 'matplotlib'),
                            NUMBA_CACHE_DIR=str(cache / 'numba'), TORCH_HOME=str(cache / 'torch'))
         environment.update(env or {})
-        entry = {'stage': label, 'argv': command, 'cwd': str(work), 'started_at': now()}
+        entry = {'stage': label, 'argv': command, 'cwd': str(work), 'started_at': now(),
+                 'thread_environment': {key: environment[key] for key in
+                    ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'NUMEXPR_NUM_THREADS')}}
         self.state['commands'].append(entry)
         self.save()
         self.message(f'{label}: {shlex.join(command)}')
@@ -244,6 +247,7 @@ class Run:
     def sources(self):
         args = self.args
         prepared = None
+        native_reference = None
         for source in (*args.binner_list, *args.bin_sources):
             previous = self.state['stages'].get(source, {})
             if previous.get('status') in {'completed', 'skipped_empty_input'}:
@@ -260,9 +264,10 @@ class Run:
                 if native:
                     if prepared is None:
                         prepared = prepare(self)
+                        native_reference = fasta_contigs(prepared[0])
                     bins = bin_contigs(self, source, stage, prepared)
                     paths = [p for p in bins.iterdir() if is_fasta(p)]
-                    reference = fasta_contigs(prepared[0])
+                    reference = native_reference
                 else:
                     paths, reference = args.bin_sources[source], None
                 rows = self.inventory(source, paths, stage, reference)
@@ -282,6 +287,7 @@ class Run:
                 self.message(f'{source} failed: {error}; continuing with other sources')
         if prepared is not None:
             shutil.rmtree(self.work / 'inputs')
+        args._normalized_depth = args._contig_lengths = None
         binning = self.work / 'binning'
         if binning.exists() and not any(binning.iterdir()):
             binning.rmdir()
@@ -292,6 +298,7 @@ class Run:
             self.message('all requested binners failed; continuing with imported bin sets')
 
     def qc(self):
+        successful = {}  # Exact FASTA bytes, same tool/reference/settings, this invocation only.
         for row in self.state['bins']:
             if row['bp'] < self.args.min_selection_size:
                 row['qc_status'] = 'below_min_selection_size'
@@ -305,10 +312,33 @@ class Run:
                 self.state['stages'][key] = {'status': 'running'}
                 self.save()
                 try:
-                    row.update(assess(self, row, tool, stage))
+                    reference = self.state['inputs']['qc_references'][f'{tool}_db']
+                    cache_key = (row['sha256'], tool, reference, self.args.threads)
                     evidence = self.out / '2_qc/evidence' / row['source'] / row['original_bin_id'] / tool
+                    reused_from = None
+                    if cache_key in successful:
+                        metrics, original_evidence, reused_from = successful[cache_key]
+                        if evidence.exists():
+                            shutil.rmtree(evidence)
+                        shutil.copytree(original_evidence, evidence)
+                        metrics = {**metrics, f'{tool}_evidence': str(evidence.relative_to(self.out)),
+                                   f'{tool}_reused_from': reused_from}
+                        self.message(f'{key}: reused identical FASTA QC from {reused_from}')
+                    else:
+                        metrics = assess(self, row, tool, stage)
+                        c = metrics.get(f'{tool}_completeness' if tool == 'eukcc' else 'busco_complete')
+                        d = metrics.get(f'{tool}_contamination' if tool == 'eukcc' else 'busco_duplicated')
+                        try:
+                            valid = math.isfinite(float(c)) and 0 <= float(c) <= 100 and math.isfinite(float(d)) and float(d) >= 0
+                        except (TypeError, ValueError):
+                            valid = False
+                        if metrics.get(f'{tool}_status') == 'ok' and valid and evidence.is_dir():
+                            successful[cache_key] = (dict(metrics), evidence, row['source'] + '/' + row['original_bin_id'])
+                    row.update(metrics)
                     self.state['stages'][key] = dict(status='completed',
                         checksums=self.checksums(evidence.rglob('*')) if evidence.exists() else {})
+                    if reused_from:
+                        self.state['stages'][key]['reused_from'] = reused_from
                     self.save()
                     shutil.rmtree(stage)
                 except (OSError, ValueError) as error:

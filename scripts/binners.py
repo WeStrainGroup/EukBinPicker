@@ -11,7 +11,10 @@ def prepare(run):
     api, args = run.api, run.args
     folder = run.work / 'inputs'
     folder.mkdir(parents=True, exist_ok=True)
-    lengths = api.fasta_lengths(args.contigs, allow_empty=True)
+    for path, state in args._input_states.items():
+        if (path.stat().st_size, path.stat().st_mtime_ns) != state:
+            raise ValueError(f'input changed after validation: {path}')
+    lengths = args._contig_lengths
     fasta = folder / 'contigs.fa'
     # One shared, length-filtered FASTA for all four binners.
     with api.open_text(args.contigs) as src, fasta.open('w') as dst:
@@ -21,20 +24,22 @@ def prepare(run):
                 keep = lengths[line[1:].split()[0]] >= args.min_input_length
             if keep:
                 dst.write(line)
-    sources = api.parse_depth_inputs(args.depth) if args.depth else ()
     if args.bam:
         jgi = folder / 'jgi.tsv'
+        jgi_threads = max(1, args.threads // 2)
+        run.message(f'coverage: JGI OpenMP budget {jgi_threads} (EBP threads={args.threads})')
         run.execute('coverage', ['jgi_summarize_bam_contig_depths', '--outputDepth', str(jgi),
                     '--percentIdentity', '97', '--minMapQual', '0', '--maxEdgeBases', '75',
-                    *map(str, args.bam)], tool='metabat2', cwd=folder)
-        sources = (api.DepthInput(jgi),)
-    text, _ = api.normalized_depth_inputs(sources, lengths, args.sample,
-                  **({} if args.bam else api.depth_column_options(args)))
-    lines = list(csv.reader(text.splitlines(), delimiter='\t'))
-    schema = identify_depth_schema(lines[0], args.sample, require_jgi=True)
-    rows = [row for row in lines[1:] if lengths[row[schema.id_index]] >= args.min_input_length]
+                    *map(str, args.bam)], tool='metabat2', cwd=folder,
+                    env={'OMP_NUM_THREADS': str(jgi_threads)})
+        header, rows, _ = api.normalized_depth_rows((api.DepthInput(jgi),), lengths, args.sample)
+    else:
+        header, rows = args._normalized_depth
+    args._normalized_depth = None
+    schema = identify_depth_schema(header, args.sample, require_jgi=True)
+    rows = [row for row in rows if lengths[row[schema.id_index]] >= args.min_input_length]
     (folder / 'jgi.tsv').unlink(missing_ok=True)
-    return fasta, lines[0], schema, rows
+    return fasta, header, schema, rows
 
 
 def write_table(path, header, rows):
@@ -128,7 +133,7 @@ def bin_contigs(run, name, stage, prepared):
         threshold = str(args.min_input_length - 1)
         run.execute(name, ['concoct', '--composition_file', str(fragments), '--coverage_file', str(coverage),
                           '--length_threshold', threshold, '--threads', threads, '--seed', seed,
-                          '-b', str(native) + '/', *extra], tool=name, cwd=stage)
+                          '--no_original_data', '-b', str(native) + '/', *extra], tool=name, cwd=stage)
         merged = stage / 'clustering_merged.csv'
         run.execute(name, ['merge_cutup_clustering.py', str(native / f'clustering_gt{threshold}.csv')],
                     tool=name, cwd=stage, stdout=merged)
