@@ -8,7 +8,7 @@ Genome-resolved metagenomics helps reveal eukaryotic diversity and function, but
 
 Binning performance varies across samples and environments. Following the complementary-binner rationale of [DAS Tool](https://github.com/cmks/DAS_Tool), EukBinPicker (EBP) evaluates candidate bins from multiple sources and selects representatives based on quality estimates and shared contigs.
 
-EBP integrates [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://bitbucket.org/berkeleylab/metabat/), [VAMB](https://github.com/RasmussenLab/vamb) and [REMAG](https://github.com/danielzmbp/remag), which use contig sequences and coverage without requiring additional information, such as prokaryotic marker genes or taxonomic assignments, for binning. It also accepts existing bin sets, alone or alongside new binning. By default, all candidates undergo the same quality assessment and selection workflow.
+EBP integrates [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://bitbucket.org/berkeleylab/metabat/), [VAMB](https://github.com/RasmussenLab/vamb) and [REMAG](https://github.com/danielzmbp/remag), which use contig sequences and coverage for binning. REMAG additionally uses its bundled eukaryotic marker genes to guide clustering and rescue. EBP also accepts existing bin sets, alone or alongside new binning. By default, all candidates undergo the same quality assessment and selection workflow.
 
 ![EukBinPicker workflow](docs/ebp_workflow.png)
 
@@ -17,18 +17,20 @@ EBP integrates [CONCOCT](https://github.com/BinPro/CONCOCT), [MetaBAT2](https://
 Install with Conda:
 
 ```bash
-conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.44
+conda create -n eukbinpicker --override-channels -c westraingroup -c conda-forge eukbinpicker=0.45
 conda activate eukbinpicker
 ```
 
 Or install a tagged release from GitHub with Git and Conda available:
 
 ```bash
-git clone --depth 1 --branch v0.44 https://github.com/WeStrainGroup/EukBinPicker.git
+git clone --depth 1 --branch v0.45 https://github.com/WeStrainGroup/EukBinPicker.git
 cd EukBinPicker
 bash install.sh --prefix "$HOME/conda-envs/eukbinpicker"
 conda activate "$HOME/conda-envs/eukbinpicker"
 ```
+
+Both installation methods use REMAG **0.6.2**, CONCOCT **1.1.0**, MetaBAT2 **2.18** (build `2.18_23_gc869c52`), VAMB **5.0.4**, EukCC **2.1.3**, BUSCO **6.x**, miniprot **0.18** and PyTorch **2.6.0** with CUDA **12.4**. SAMtools (≥1.17) and SeqKit are also installed; their resolved versions depend on Conda.
 
 Download reference databases separately. Provide an unpacked [EukCC database](https://github.com/Finn-Lab/EukCC) with `--eukcc-db`, or a [BUSCO lineage](https://busco.ezlab.org/) with `--busco-db`. Alternatively, set `EUKBINPICKER_EUKCC_DB` or `EUKBINPICKER_BUSCO_DB`.
 
@@ -147,7 +149,7 @@ EBP uses native algorithm defaults unless overridden, with shared contig-length,
 
 For new binning, EBP applies this cutoff before FASTA export. REMAG and VAMB use native export thresholds, and CONCOCT filters bin memberships. MetaBAT2 receives the value as `--minClsSize`, which also affects cluster processing; the default matches its native 200,000-bp setting.
 
-REMAG's classifier is skipped because the supplied contigs are expected to have already been identified as eukaryotic. CONCOCT calculates fragment coverage from BAMs, or approximates it from parent-contig means when given tables.
+REMAG's classifier is skipped because the supplied contigs are expected to have already been identified as eukaryotic. Its native training, graph and rescue defaults are retained. CONCOCT calculates fragment coverage from BAMs, or approximates it from parent-contig means when given tables.
 
 To customize a binner, pass native options in one quoted string. Use EBP options for input/output paths and shared settings:
 

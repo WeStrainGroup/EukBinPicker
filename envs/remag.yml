@@ -3,5 +3,5 @@ channels:
   - conda-forge
   - bioconda
 dependencies:
-  - remag=0.4.4
+  - remag=0.6.2
   - miniprot=0.18

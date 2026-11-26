@@ -62,6 +62,25 @@ if "--version" not in args and "--help" not in args:
             parsed = cli.parse_arguments([*base, f"--{name}-parameters", value])
             self.assertEqual(getattr(parsed, f"{name}_parameters"), value)
 
+    def test_remag_062_uses_native_training_graph_and_rescue_defaults(self):
+        for minimum in (0, 200000):
+            output = self.root / f'remag-defaults-{minimum}'
+            arguments = self.base_run(output)
+            index = arguments.index('--min-retain-size')
+            arguments[index + 1] = str(minimum)
+            result = self.run_cli(*arguments, '--binners', 'remag',
+                                  '--min-selection-size', '500000',
+                                  '--eukcc-db', str(self.eukcc_db))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            record = json.loads((output / '0_log/run.json').read_text())
+            command = next(c['argv'] for c in record['commands'] if c['stage'] == 'remag')
+            self.assertEqual(command[command.index('--min-bin-size') + 1], str(minimum))
+            self.assertEqual(command[command.index('--random-seed') + 1], '6311')
+            self.assertIn('--skip-bacterial-filter', command)
+            for option in ('--epochs', '--batch-size', '--graph-min-contig-length',
+                           '--base-learning-rate', '--skip-rescue'):
+                self.assertNotIn(option, command)
+
     def test_missing_native_value_does_not_consume_next_public_option(self):
         result = self.run_cli(*self.base_run(self.root / "missing"),
             "--concoct-parameters", "--threads", "8")

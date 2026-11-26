@@ -105,12 +105,12 @@ elif name == "seqkit":
         print(f"{Path(raw_path).resolve()}\t{len(lengths)}\t{total}\t{n50}\t{max(lengths)}")
 elif name == "remag":
     if "--version" in args:
-        print("remag 0.4.4")
+        print("remag 0.6.2")
     else:
         expected_seed = os.environ.get("MOCK_EXPECTED_SEED")
         if expected_seed is not None and value("--random-seed") != expected_seed:
             raise SystemExit("unexpected ReMAG random seed")
-        if int(value("--min-bin-size")) < 1:
+        if int(value("--min-bin-size")) < 0:
             raise SystemExit("invalid REMAG export threshold")
         source = args[0]
         out = Path(value("-o"))

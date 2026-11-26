@@ -38,7 +38,7 @@ class InstallerTests(unittest.TestCase):
             installer.install(self.prefix, "/mock/conda")
         package = self.prefix / "share/eukbinpicker"
         config = json.loads((package / "installation.json").read_text())
-        self.assertEqual(config["version"], "0.44")
+        self.assertEqual(config["version"], "0.45")
         self.assertFalse((self.prefix.with_name("." + self.prefix.name + ".ebp-install") / "settings.json").exists())
         self.assertFalse((package / "install-cache").exists())
         self.assertTrue((self.prefix / "bin/eukbinpicker").is_file())
@@ -46,7 +46,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(config["environments"][tool.upper() + "_ENV"],
                              str(package / "environments" / tool))
         flattened = " ".join(" ".join(x) for x in self.commands)
-        for requirement in ("vamb==5.0.4", "remag==0.4.4", "samtools>=1.17", "busco=6"):
+        for requirement in ("vamb==5.0.4", "remag==0.6.2", "samtools>=1.17", "busco=6"):
             self.assertIn(requirement, flattened)
         self.assertIn("https://download.pytorch.org/whl/cu124", flattened)
         with patch.object(cli, "ROOT", package), patch.dict(os.environ, {}, clear=True):

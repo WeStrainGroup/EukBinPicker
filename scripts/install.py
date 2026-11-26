@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.44"
+VERSION = "0.45"
 SOURCE = Path(__file__).resolve().parents[1]
 
 
@@ -74,7 +74,7 @@ def install(prefix: Path, conda: str) -> None:
     python = str(prefix / "bin/python")
     step("pytorch", [[python, "-m", "pip", "install", "torch==2.6.0+cu124", "--index-url",
                       "https://download.pytorch.org/whl/cu124"]])
-    step("neural_binners", [[python, "-m", "pip", "install", "vamb==5.0.4", "remag==0.4.4"],
+    step("neural_binners", [[python, "-m", "pip", "install", "vamb==5.0.4", "remag==0.6.2"],
                             [python, "-m", "pip", "check"]])
 
     specs = {

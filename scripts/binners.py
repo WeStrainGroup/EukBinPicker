@@ -109,7 +109,7 @@ def bin_contigs(run, name, stage, prepared):
         command = ['python' if api.environment_value('REMAG_ENV') else sys.executable,
                    str(api.SCRIPTS / 'run_remag.py'), '--gpu', args.gpu, '--', 'remag', str(fasta),
                    *coverage_args, '-o', str(stage), '--skip-bacterial-filter',
-                   '--min-bin-size', str(max(1, args.min_retain_size)),
+                   '--min-bin-size', str(args.min_retain_size),
                    '--min-contig-length', length, '--random-seed', seed, '-t', threads, *extra]
         run.execute(name, command, tool=name, cwd=stage)
     elif name == 'concoct':
